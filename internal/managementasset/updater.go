@@ -3,6 +3,7 @@ package managementasset
 import (
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -32,6 +33,9 @@ const (
 	managementSyncMinInterval    = 30 * time.Second
 	updateCheckInterval          = 3 * time.Hour
 )
+
+//go:embed bundled/management.html
+var bundledManagementHTML []byte
 
 // ManagementFileName exposes the control panel asset filename.
 const ManagementFileName = managementAssetName
@@ -185,6 +189,9 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 		return false
 	}
 	localPath := filepath.Join(staticDir, managementAssetName)
+	if localFileExists(localPath) {
+		return true
+	}
 
 	_, _, _ = sfGroup.Do(localPath, func() (interface{}, error) {
 		lastUpdateCheckMu.Lock()
@@ -213,6 +220,9 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 
 		if errMkdirAll := os.MkdirAll(staticDir, 0o755); errMkdirAll != nil {
 			log.WithError(errMkdirAll).Warn("failed to prepare static directory for management asset")
+			return nil, nil
+		}
+		if localFileMissing && ensureBundledManagementHTML(localPath) {
 			return nil, nil
 		}
 
@@ -273,6 +283,27 @@ func EnsureLatestManagementHTML(ctx context.Context, staticDir string, proxyURL 
 
 	_, err := os.Stat(localPath)
 	return err == nil
+}
+
+func localFileExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func ensureBundledManagementHTML(localPath string) bool {
+	if len(bundledManagementHTML) == 0 || strings.TrimSpace(localPath) == "" {
+		return false
+	}
+	if err := atomicWriteFile(localPath, bundledManagementHTML); err != nil {
+		log.WithError(err).Warn("failed to persist bundled management asset")
+		return false
+	}
+	sum := sha256.Sum256(bundledManagementHTML)
+	log.Infof("management asset initialized from bundled HTML (hash=%s)", hex.EncodeToString(sum[:]))
+	return true
 }
 
 func ensureFallbackManagementHTML(ctx context.Context, client *http.Client, localPath string) bool {
