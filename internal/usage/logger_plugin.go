@@ -90,11 +90,12 @@ type modelStats struct {
 
 // RequestDetail stores the timestamp and token usage for a single request.
 type RequestDetail struct {
-	Timestamp time.Time  `json:"timestamp"`
-	Source    string     `json:"source"`
-	AuthIndex string     `json:"auth_index"`
-	Tokens    TokenStats `json:"tokens"`
-	Failed    bool       `json:"failed"`
+	Timestamp   time.Time  `json:"timestamp"`
+	Source      string     `json:"source"`
+	AuthIndex   string     `json:"auth_index"`
+	ServiceTier string     `json:"service_tier,omitempty"`
+	Tokens      TokenStats `json:"tokens"`
+	Failed      bool       `json:"failed"`
 }
 
 // TokenStats captures the token usage breakdown for a request.
@@ -358,12 +359,13 @@ func dedupKey(apiName, modelName string, detail RequestDetail) string {
 	timestamp := detail.Timestamp.UTC().Format(time.RFC3339Nano)
 	tokens := normaliseTokenStats(detail.Tokens)
 	return fmt.Sprintf(
-		"%s|%s|%s|%s|%s|%t|%d|%d|%d|%d|%d",
+		"%s|%s|%s|%s|%s|%s|%t|%d|%d|%d|%d|%d",
 		apiName,
 		modelName,
 		timestamp,
 		detail.Source,
 		detail.AuthIndex,
+		detail.ServiceTier,
 		detail.Failed,
 		tokens.InputTokens,
 		tokens.OutputTokens,
@@ -477,11 +479,12 @@ func normalisePersistedRecord(ctx context.Context, record coreusage.Record) pers
 		APIName:   apiName,
 		ModelName: modelName,
 		Detail: RequestDetail{
-			Timestamp: timestamp,
-			Source:    record.Source,
-			AuthIndex: record.AuthIndex,
-			Tokens:    normaliseDetail(record.Detail),
-			Failed:    failed,
+			Timestamp:   timestamp,
+			Source:      record.Source,
+			AuthIndex:   record.AuthIndex,
+			ServiceTier: strings.TrimSpace(record.Detail.ServiceTier),
+			Tokens:      normaliseDetail(record.Detail),
+			Failed:      failed,
 		},
 	}
 }

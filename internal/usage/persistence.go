@@ -357,6 +357,7 @@ func (s *sqliteUsageStore) init() error {
 			requested_at_unix_ns INTEGER NOT NULL,
 			source TEXT NOT NULL DEFAULT '',
 			auth_index TEXT NOT NULL DEFAULT '',
+			service_tier TEXT NOT NULL DEFAULT '',
 			failed INTEGER NOT NULL,
 			input_tokens INTEGER NOT NULL,
 			output_tokens INTEGER NOT NULL,
@@ -370,6 +371,11 @@ func (s *sqliteUsageStore) init() error {
 	for _, statement := range statements {
 		if _, err := s.db.Exec(statement); err != nil {
 			return fmt.Errorf("initialise usage sqlite database: %w", err)
+		}
+	}
+	if _, err := s.db.Exec(`ALTER TABLE usage_records ADD COLUMN service_tier TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return fmt.Errorf("add usage sqlite service_tier column: %w", err)
 		}
 	}
 	return nil
@@ -391,9 +397,9 @@ func (s *sqliteUsageStore) insertBatch(records []persistedUsageRecord) error {
 		return fmt.Errorf("begin usage sqlite transaction: %w", err)
 	}
 	stmt, err := tx.PrepareContext(context.Background(), `INSERT OR IGNORE INTO usage_records (
-		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, failed,
+		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, failed,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("prepare usage sqlite insert: %w", err)
@@ -412,6 +418,7 @@ func (s *sqliteUsageStore) insertBatch(records []persistedUsageRecord) error {
 			detail.Timestamp.UnixNano(),
 			detail.Source,
 			detail.AuthIndex,
+			detail.ServiceTier,
 			boolToInt(detail.Failed),
 			detail.Tokens.InputTokens,
 			detail.Tokens.OutputTokens,
@@ -462,9 +469,9 @@ func (s *sqliteUsageStore) insertSnapshot(snapshot StatisticsSnapshot) (MergeRes
 		return MergeResult{}, fmt.Errorf("begin usage sqlite import transaction: %w", err)
 	}
 	stmt, err := tx.PrepareContext(context.Background(), `INSERT OR IGNORE INTO usage_records (
-		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, failed,
+		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, failed,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return MergeResult{}, fmt.Errorf("prepare usage sqlite import: %w", err)
@@ -482,6 +489,7 @@ func (s *sqliteUsageStore) insertSnapshot(snapshot StatisticsSnapshot) (MergeRes
 			record.Detail.Timestamp.UnixNano(),
 			record.Detail.Source,
 			record.Detail.AuthIndex,
+			record.Detail.ServiceTier,
 			boolToInt(record.Detail.Failed),
 			record.Detail.Tokens.InputTokens,
 			record.Detail.Tokens.OutputTokens,
@@ -514,7 +522,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 	if s == nil || s.db == nil || stats == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT api_name, model_name, requested_at_unix_ns, source, auth_index, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens FROM usage_records ORDER BY id`)
+	rows, err := s.db.Query(`SELECT api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens FROM usage_records ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("query usage sqlite records: %w", err)
 	}
@@ -531,6 +539,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 			requestedAtUnix int64
 			source          string
 			authIndex       string
+			serviceTier     string
 			failedInt       int
 			detail          RequestDetail
 		)
@@ -540,6 +549,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 			&requestedAtUnix,
 			&source,
 			&authIndex,
+			&serviceTier,
 			&failedInt,
 			&detail.Tokens.InputTokens,
 			&detail.Tokens.OutputTokens,
@@ -560,6 +570,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 		detail.Timestamp = time.Unix(0, requestedAtUnix)
 		detail.Source = source
 		detail.AuthIndex = authIndex
+		detail.ServiceTier = strings.TrimSpace(serviceTier)
 		detail.Failed = failedInt != 0
 		detail.Tokens = normaliseTokenStats(detail.Tokens)
 

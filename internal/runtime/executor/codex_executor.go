@@ -269,7 +269,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 	appendAPIResponseChunk(ctx, e.cfg, data)
-	reporter.publish(ctx, parseOpenAIUsage(data))
+	detail := parseOpenAIUsage(data)
+	detail.ServiceTier = parseServiceTier(data, "service_tier", "response.service_tier")
+	reporter.publish(ctx, detail)
 	reporter.ensurePublished(ctx)
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, data, &param)

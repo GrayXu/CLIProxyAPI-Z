@@ -41,3 +41,20 @@ func TestParseOpenAIUsageResponses(t *testing.T) {
 		t.Fatalf("reasoning tokens = %d, want %d", detail.ReasoningTokens, 9)
 	}
 }
+
+func TestParseCodexUsageIncludesServiceTier(t *testing.T) {
+	data := []byte(`{"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30},"service_tier":"priority"}}`)
+	detail, ok := parseCodexUsage(data)
+	if !ok {
+		t.Fatal("expected codex usage to be parsed")
+	}
+	if detail.ServiceTier != "priority" {
+		t.Fatalf("service tier = %q, want %q", detail.ServiceTier, "priority")
+	}
+}
+
+func TestParseServiceTierFallbackPaths(t *testing.T) {
+	if got := parseServiceTier([]byte(`{"service_tier":"priority"}`), "response.service_tier", "service_tier"); got != "priority" {
+		t.Fatalf("service tier = %q, want %q", got, "priority")
+	}
+}

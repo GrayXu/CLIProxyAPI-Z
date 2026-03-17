@@ -184,6 +184,7 @@ func parseCodexUsage(data []byte) (usage.Detail, bool) {
 		InputTokens:  usageNode.Get("input_tokens").Int(),
 		OutputTokens: usageNode.Get("output_tokens").Int(),
 		TotalTokens:  usageNode.Get("total_tokens").Int(),
+		ServiceTier:  parseServiceTier(data, "response.service_tier", "service_tier"),
 	}
 	if cached := usageNode.Get("input_tokens_details.cached_tokens"); cached.Exists() {
 		detail.CachedTokens = cached.Int()
@@ -192,6 +193,18 @@ func parseCodexUsage(data []byte) (usage.Detail, bool) {
 		detail.ReasoningTokens = reasoning.Int()
 	}
 	return detail, true
+}
+
+func parseServiceTier(data []byte, paths ...string) string {
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if value := strings.TrimSpace(gjson.GetBytes(data, path).String()); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func parseOpenAIUsage(data []byte) usage.Detail {
