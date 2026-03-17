@@ -16,14 +16,15 @@ import (
 )
 
 type usageReporter struct {
-	provider    string
-	model       string
-	authID      string
-	authIndex   string
-	apiKey      string
-	source      string
-	requestedAt time.Time
-	once        sync.Once
+	provider          string
+	model             string
+	authID            string
+	authIndex         string
+	apiKey            string
+	source            string
+	requestedAt       time.Time
+	requestedFastMode bool
+	once              sync.Once
 }
 
 func newUsageReporter(ctx context.Context, provider, model string, auth *cliproxyauth.Auth) *usageReporter {
@@ -72,6 +73,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 	if detail.InputTokens == 0 && detail.OutputTokens == 0 && detail.ReasoningTokens == 0 && detail.CachedTokens == 0 && detail.TotalTokens == 0 && !failed {
 		return
 	}
+	detail.RequestedFastMode = r.requestedFastMode
 	r.once.Do(func() {
 		usage.PublishRecord(ctx, usage.Record{
 			Provider:    r.provider,
@@ -105,9 +107,16 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 			AuthIndex:   r.authIndex,
 			RequestedAt: r.requestedAt,
 			Failed:      false,
-			Detail:      usage.Detail{},
+			Detail:      usage.Detail{RequestedFastMode: r.requestedFastMode},
 		})
 	})
+}
+
+func (r *usageReporter) setRequestedFastModeFromPayload(payload []byte) {
+	if r == nil {
+		return
+	}
+	r.requestedFastMode = requestedFastModeFromPayload(payload)
 }
 
 func apiKeyFromContext(ctx context.Context) string {
@@ -205,6 +214,10 @@ func parseServiceTier(data []byte, paths ...string) string {
 		}
 	}
 	return ""
+}
+
+func requestedFastModeFromPayload(payload []byte) bool {
+	return strings.EqualFold(parseServiceTier(payload, "service_tier", "response.service_tier"), "priority")
 }
 
 func parseOpenAIUsage(data []byte) usage.Detail {

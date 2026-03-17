@@ -358,6 +358,7 @@ func (s *sqliteUsageStore) init() error {
 			source TEXT NOT NULL DEFAULT '',
 			auth_index TEXT NOT NULL DEFAULT '',
 			service_tier TEXT NOT NULL DEFAULT '',
+			requested_fast_mode INTEGER NOT NULL DEFAULT 0,
 			failed INTEGER NOT NULL,
 			input_tokens INTEGER NOT NULL,
 			output_tokens INTEGER NOT NULL,
@@ -376,6 +377,11 @@ func (s *sqliteUsageStore) init() error {
 	if _, err := s.db.Exec(`ALTER TABLE usage_records ADD COLUMN service_tier TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 			return fmt.Errorf("add usage sqlite service_tier column: %w", err)
+		}
+	}
+	if _, err := s.db.Exec(`ALTER TABLE usage_records ADD COLUMN requested_fast_mode INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return fmt.Errorf("add usage sqlite requested_fast_mode column: %w", err)
 		}
 	}
 	return nil
@@ -397,9 +403,9 @@ func (s *sqliteUsageStore) insertBatch(records []persistedUsageRecord) error {
 		return fmt.Errorf("begin usage sqlite transaction: %w", err)
 	}
 	stmt, err := tx.PrepareContext(context.Background(), `INSERT OR IGNORE INTO usage_records (
-		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, failed,
+		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, requested_fast_mode, failed,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("prepare usage sqlite insert: %w", err)
@@ -419,6 +425,7 @@ func (s *sqliteUsageStore) insertBatch(records []persistedUsageRecord) error {
 			detail.Source,
 			detail.AuthIndex,
 			detail.ServiceTier,
+			boolToInt(detail.RequestedFastMode),
 			boolToInt(detail.Failed),
 			detail.Tokens.InputTokens,
 			detail.Tokens.OutputTokens,
@@ -469,9 +476,9 @@ func (s *sqliteUsageStore) insertSnapshot(snapshot StatisticsSnapshot) (MergeRes
 		return MergeResult{}, fmt.Errorf("begin usage sqlite import transaction: %w", err)
 	}
 	stmt, err := tx.PrepareContext(context.Background(), `INSERT OR IGNORE INTO usage_records (
-		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, failed,
+		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, requested_fast_mode, failed,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return MergeResult{}, fmt.Errorf("prepare usage sqlite import: %w", err)
@@ -490,6 +497,7 @@ func (s *sqliteUsageStore) insertSnapshot(snapshot StatisticsSnapshot) (MergeRes
 			record.Detail.Source,
 			record.Detail.AuthIndex,
 			record.Detail.ServiceTier,
+			boolToInt(record.Detail.RequestedFastMode),
 			boolToInt(record.Detail.Failed),
 			record.Detail.Tokens.InputTokens,
 			record.Detail.Tokens.OutputTokens,
@@ -522,7 +530,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 	if s == nil || s.db == nil || stats == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens FROM usage_records ORDER BY id`)
+	rows, err := s.db.Query(`SELECT api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, requested_fast_mode, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens FROM usage_records ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("query usage sqlite records: %w", err)
 	}
@@ -534,14 +542,15 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 	defer stats.mu.Unlock()
 	for rows.Next() {
 		var (
-			apiName         string
-			modelName       string
-			requestedAtUnix int64
-			source          string
-			authIndex       string
-			serviceTier     string
-			failedInt       int
-			detail          RequestDetail
+			apiName           string
+			modelName         string
+			requestedAtUnix   int64
+			source            string
+			authIndex         string
+			serviceTier       string
+			requestedFastMode int
+			failedInt         int
+			detail            RequestDetail
 		)
 		if errScan := rows.Scan(
 			&apiName,
@@ -550,6 +559,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 			&source,
 			&authIndex,
 			&serviceTier,
+			&requestedFastMode,
 			&failedInt,
 			&detail.Tokens.InputTokens,
 			&detail.Tokens.OutputTokens,
@@ -571,6 +581,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 		detail.Source = source
 		detail.AuthIndex = authIndex
 		detail.ServiceTier = strings.TrimSpace(serviceTier)
+		detail.RequestedFastMode = requestedFastMode != 0
 		detail.Failed = failedInt != 0
 		detail.Tokens = normaliseTokenStats(detail.Tokens)
 

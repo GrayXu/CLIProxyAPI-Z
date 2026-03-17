@@ -57,10 +57,11 @@ func TestSQLiteUsageStoreReloadsPersistedRecords(t *testing.T) {
 			APIName:   "key-1",
 			ModelName: "gpt-5",
 			Detail: RequestDetail{
-				Timestamp:   ts1,
-				Source:      "chat",
-				AuthIndex:   "0",
-				ServiceTier: "priority",
+				Timestamp:         ts1,
+				Source:            "chat",
+				AuthIndex:         "0",
+				ServiceTier:       "priority",
+				RequestedFastMode: true,
 				Tokens: TokenStats{
 					InputTokens:  10,
 					OutputTokens: 5,
@@ -72,11 +73,12 @@ func TestSQLiteUsageStoreReloadsPersistedRecords(t *testing.T) {
 			APIName:   "key-1",
 			ModelName: "gpt-5",
 			Detail: RequestDetail{
-				Timestamp:   ts2,
-				Source:      "chat",
-				AuthIndex:   "0",
-				ServiceTier: "",
-				Failed:      true,
+				Timestamp:         ts2,
+				Source:            "chat",
+				AuthIndex:         "0",
+				ServiceTier:       "",
+				RequestedFastMode: true,
+				Failed:            true,
 				Tokens: TokenStats{
 					InputTokens:  4,
 					OutputTokens: 1,
@@ -119,6 +121,9 @@ func TestSQLiteUsageStoreReloadsPersistedRecords(t *testing.T) {
 	if modelSnapshot.Details[0].ServiceTier != "priority" {
 		t.Fatalf("expected first request detail service tier priority, got %q", modelSnapshot.Details[0].ServiceTier)
 	}
+	if !modelSnapshot.Details[0].RequestedFastMode {
+		t.Fatal("expected first request detail requested fast mode to be true")
+	}
 }
 
 func TestSQLiteUsageStoreInsertSnapshotDeduplicates(t *testing.T) {
@@ -140,10 +145,11 @@ func TestSQLiteUsageStoreInsertSnapshotDeduplicates(t *testing.T) {
 					"gpt-5": {
 						Details: []RequestDetail{
 							{
-								Timestamp:   time.Date(2026, 3, 10, 11, 0, 0, 0, time.UTC),
-								Source:      "chat",
-								AuthIndex:   "1",
-								ServiceTier: "priority",
+								Timestamp:         time.Date(2026, 3, 10, 11, 0, 0, 0, time.UTC),
+								Source:            "chat",
+								AuthIndex:         "1",
+								ServiceTier:       "priority",
+								RequestedFastMode: true,
 								Tokens: TokenStats{
 									InputTokens:  3,
 									OutputTokens: 2,

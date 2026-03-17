@@ -58,3 +58,12 @@ func TestParseServiceTierFallbackPaths(t *testing.T) {
 		t.Fatalf("service tier = %q, want %q", got, "priority")
 	}
 }
+
+func TestRequestedFastModeFromPayload(t *testing.T) {
+	if !requestedFastModeFromPayload([]byte(`{"service_tier":"priority"}`)) {
+		t.Fatal("expected requested fast mode to be true")
+	}
+	if requestedFastModeFromPayload([]byte(`{"service_tier":"default"}`)) {
+		t.Fatal("expected requested fast mode to be false")
+	}
+}
