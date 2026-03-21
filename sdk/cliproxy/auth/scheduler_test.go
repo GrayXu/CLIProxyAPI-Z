@@ -119,6 +119,80 @@ func TestSchedulerPick_FillFirstSticksToFirstReady(t *testing.T) {
 	}
 }
 
+func TestSchedulerPick_QuotaStickyPrefersHighestQuotaScoreWithinPriorityBucket(t *testing.T) {
+	t.Parallel()
+
+	registerSchedulerModels(t, "gemini", "test-model", "low-priority", "high-a", "high-b")
+	scheduler := newSchedulerForTest(
+		&QuotaStickySelector{},
+		&Auth{
+			ID:         "low-priority",
+			Provider:   "gemini",
+			Attributes: map[string]string{"priority": "1"},
+			Metadata:   map[string]any{routingQuotaScoreMetadataKey: 100},
+		},
+		&Auth{
+			ID:         "high-a",
+			Provider:   "gemini",
+			Attributes: map[string]string{"priority": "10"},
+			Metadata:   map[string]any{routingQuotaScoreMetadataKey: 10},
+		},
+		&Auth{
+			ID:         "high-b",
+			Provider:   "gemini",
+			Attributes: map[string]string{"priority": "10"},
+			Metadata:   map[string]any{routingQuotaScoreMetadataKey: 20},
+		},
+	)
+
+	got, errPick := scheduler.pickSingle(context.Background(), "gemini", "test-model", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil {
+		t.Fatal("pickSingle() auth = nil")
+	}
+	if got.ID != "high-b" {
+		t.Fatalf("pickSingle() auth.ID = %q, want %q", got.ID, "high-b")
+	}
+}
+
+func TestSchedulerPick_MixedProvidersQuotaStickyPrefersHighestQuotaScore(t *testing.T) {
+	t.Parallel()
+
+	registerSchedulerModels(t, "gemini", "test-model", "gemini-a")
+	registerSchedulerModels(t, "claude", "test-model", "claude-a")
+	scheduler := newSchedulerForTest(
+		&QuotaStickySelector{},
+		&Auth{
+			ID:         "gemini-a",
+			Provider:   "gemini",
+			Attributes: map[string]string{"priority": "10"},
+			Metadata:   map[string]any{routingQuotaScoreMetadataKey: 10},
+		},
+		&Auth{
+			ID:         "claude-a",
+			Provider:   "claude",
+			Attributes: map[string]string{"priority": "10"},
+			Metadata:   map[string]any{routingQuotaScoreMetadataKey: 50},
+		},
+	)
+
+	got, provider, errPick := scheduler.pickMixed(context.Background(), []string{"gemini", "claude"}, "test-model", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickMixed() error = %v", errPick)
+	}
+	if got == nil {
+		t.Fatal("pickMixed() auth = nil")
+	}
+	if provider != "claude" {
+		t.Fatalf("pickMixed() provider = %q, want %q", provider, "claude")
+	}
+	if got.ID != "claude-a" {
+		t.Fatalf("pickMixed() auth.ID = %q, want %q", got.ID, "claude-a")
+	}
+}
+
 func TestSchedulerPick_PromotesExpiredCooldownBeforePick(t *testing.T) {
 	t.Parallel()
 

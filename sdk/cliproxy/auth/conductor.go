@@ -163,6 +163,7 @@ type Manager struct {
 	// Auto refresh state
 	refreshCancel    context.CancelFunc
 	refreshSemaphore chan struct{}
+	stickyRouter     *stickyRouter
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -182,6 +183,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		providerOffsets:  make(map[string]int),
 		modelPoolOffsets: make(map[string]int),
 		refreshSemaphore: make(chan struct{}, refreshMaxConcurrency),
+		stickyRouter:     newStickyRouter(stickyRouteTTL, stickyRouteMaxEntries),
 	}
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})
@@ -192,7 +194,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 
 func isBuiltInSelector(selector Selector) bool {
 	switch selector.(type) {
-	case *RoundRobinSelector, *FillFirstSelector:
+	case *RoundRobinSelector, *FillFirstSelector, *QuotaStickySelector:
 		return true
 	default:
 		return false
@@ -987,7 +989,12 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			}
 			return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
+		stickyState := m.stickySelectionState(providers, routeModel, opts, tried)
+		pickOpts := opts
+		if stickyState.pinnedAuthID != "" {
+			pickOpts = withPinnedAuthMetadata(opts, stickyState.pinnedAuthID)
+		}
+		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, lastErr
@@ -997,7 +1004,10 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, req.Model)
-		publishSelectedAuthMetadata(opts.Metadata, auth.ID)
+		if stickyState.conversationKey != "" && stickyState.canBind {
+			m.bindStickyRoute(stickyState.conversationKey, auth.ID)
+		}
+		publishSelectedAuthMetadata(pickOpts.Metadata, auth.ID)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -1011,7 +1021,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		for _, upstreamModel := range models {
 			execReq := req
 			execReq.Model = upstreamModel
-			resp, errExec := executor.Execute(execCtx, auth, execReq, opts)
+			resp, errExec := executor.Execute(execCtx, auth, execReq, pickOpts)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: errExec == nil}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
@@ -1059,7 +1069,12 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			}
 			return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
+		stickyState := m.stickySelectionState(providers, routeModel, opts, tried)
+		pickOpts := opts
+		if stickyState.pinnedAuthID != "" {
+			pickOpts = withPinnedAuthMetadata(opts, stickyState.pinnedAuthID)
+		}
+		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
 			if lastErr != nil {
 				return cliproxyexecutor.Response{}, lastErr
@@ -1069,7 +1084,10 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, req.Model)
-		publishSelectedAuthMetadata(opts.Metadata, auth.ID)
+		if stickyState.conversationKey != "" && stickyState.canBind {
+			m.bindStickyRoute(stickyState.conversationKey, auth.ID)
+		}
+		publishSelectedAuthMetadata(pickOpts.Metadata, auth.ID)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -1083,7 +1101,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		for _, upstreamModel := range models {
 			execReq := req
 			execReq.Model = upstreamModel
-			resp, errExec := executor.CountTokens(execCtx, auth, execReq, opts)
+			resp, errExec := executor.CountTokens(execCtx, auth, execReq, pickOpts)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: errExec == nil}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
@@ -1131,7 +1149,12 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, opts, tried)
+		stickyState := m.stickySelectionState(providers, routeModel, opts, tried)
+		pickOpts := opts
+		if stickyState.pinnedAuthID != "" {
+			pickOpts = withPinnedAuthMetadata(opts, stickyState.pinnedAuthID)
+		}
+		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
 			if lastErr != nil {
 				return nil, lastErr
@@ -1141,7 +1164,10 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, req.Model)
-		publishSelectedAuthMetadata(opts.Metadata, auth.ID)
+		if stickyState.conversationKey != "" && stickyState.canBind {
+			m.bindStickyRoute(stickyState.conversationKey, auth.ID)
+		}
+		publishSelectedAuthMetadata(pickOpts.Metadata, auth.ID)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -1149,7 +1175,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			execCtx = context.WithValue(execCtx, roundTripperContextKey{}, rt)
 			execCtx = context.WithValue(execCtx, "cliproxy.roundtripper", rt)
 		}
-		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, req, opts, routeModel)
+		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, req, pickOpts, routeModel)
 		if errStream != nil {
 			if errCtx := execCtx.Err(); errCtx != nil {
 				return nil, errCtx
@@ -2348,6 +2374,17 @@ func (m *Manager) StopAutoRefresh() {
 	if m.refreshCancel != nil {
 		m.refreshCancel()
 		m.refreshCancel = nil
+	}
+}
+
+// Close releases background resources owned by the manager.
+func (m *Manager) Close() {
+	if m == nil {
+		return
+	}
+	m.StopAutoRefresh()
+	if m.stickyRouter != nil {
+		m.stickyRouter.Close()
 	}
 }
 

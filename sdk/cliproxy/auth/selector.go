@@ -29,6 +29,10 @@ type RoundRobinSelector struct {
 // rolling-window subscription caps (e.g. chat message limits).
 type FillFirstSelector struct{}
 
+// QuotaStickySelector selects the ready credential with the highest cached quota score.
+// Sticky mapping is owned by Manager; this selector only handles first-pick ordering.
+type QuotaStickySelector struct{}
+
 type blockReason int
 
 const (
@@ -360,6 +364,27 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 	}
 	available = preferCodexWebsocketAuths(ctx, provider, available)
 	return available[0], nil
+}
+
+// Pick selects the ready auth with the highest cached quota score.
+func (s *QuotaStickySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	_ = opts
+	now := time.Now()
+	available, err := getAvailableAuths(auths, provider, model, now)
+	if err != nil {
+		return nil, err
+	}
+	available = preferCodexWebsocketAuths(ctx, provider, available)
+	var best *Auth
+	for _, candidate := range available {
+		if betterAuthByQuotaScore(candidate, best, model) {
+			best = candidate
+		}
+	}
+	if best == nil {
+		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+	}
+	return best, nil
 }
 
 func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {

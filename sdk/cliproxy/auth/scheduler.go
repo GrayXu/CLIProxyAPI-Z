@@ -18,6 +18,7 @@ const (
 	schedulerStrategyCustom schedulerStrategy = iota
 	schedulerStrategyRoundRobin
 	schedulerStrategyFillFirst
+	schedulerStrategyQuotaSticky
 )
 
 // scheduledState describes how an auth currently participates in a model shard.
@@ -112,6 +113,8 @@ func selectorStrategy(selector Selector) schedulerStrategy {
 	switch selector.(type) {
 	case *FillFirstSelector:
 		return schedulerStrategyFillFirst
+	case *QuotaStickySelector:
+		return schedulerStrategyQuotaSticky
 	case nil, *RoundRobinSelector:
 		return schedulerStrategyRoundRobin
 	default:
@@ -288,6 +291,31 @@ func (s *authScheduler) pickMixed(ctx context.Context, providers []string, model
 			if picked != nil {
 				return picked, providerKey, nil
 			}
+		}
+		return nil, "", s.mixedUnavailableErrorLocked(normalized, model, tried)
+	}
+
+	if s.strategy == schedulerStrategyQuotaSticky {
+		var (
+			bestAuth     *Auth
+			bestProvider string
+		)
+		for providerIndex, providerKey := range normalized {
+			shard := candidateShards[providerIndex]
+			if shard == nil {
+				continue
+			}
+			picked := shard.pickReadyAtPriorityLocked(false, bestPriority, schedulerStrategyQuotaSticky, predicate)
+			if picked == nil {
+				continue
+			}
+			if betterAuthByQuotaScore(picked, bestAuth, model) {
+				bestAuth = picked
+				bestProvider = providerKey
+			}
+		}
+		if bestAuth != nil {
+			return bestAuth, bestProvider, nil
 		}
 		return nil, "", s.mixedUnavailableErrorLocked(normalized, model, tried)
 	}
@@ -695,6 +723,8 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	var picked *scheduledAuth
 	if strategy == schedulerStrategyFillFirst {
 		picked = view.pickFirst(predicate)
+	} else if strategy == schedulerStrategyQuotaSticky {
+		picked = view.pickHighestQuotaScore(m.modelKey, predicate)
 	} else {
 		picked = view.pickRoundRobin(predicate)
 	}
@@ -873,6 +903,20 @@ func (v *readyView) pickRoundRobin(predicate func(*scheduledAuth) bool) *schedul
 		return entry
 	}
 	return nil
+}
+
+// pickHighestQuotaScore returns the ready entry with the highest cached quota score.
+func (v *readyView) pickHighestQuotaScore(model string, predicate func(*scheduledAuth) bool) *scheduledAuth {
+	var best *scheduledAuth
+	for _, entry := range v.flat {
+		if predicate != nil && !predicate(entry) {
+			continue
+		}
+		if best == nil || betterAuthByQuotaScore(entry.auth, best.auth, model) {
+			best = entry
+		}
+	}
+	return best
 }
 
 // pickGroupedRoundRobin rotates across parents first and then within the selected parent.

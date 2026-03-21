@@ -111,6 +111,28 @@ func newDefaultAuthManager() *sdkAuth.Manager {
 	)
 }
 
+func normalizeRoutingStrategy(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "fill-first", "fillfirst", "ff":
+		return "fill-first"
+	case "quota-sticky", "quotasticky", "qs":
+		return "quota-sticky"
+	default:
+		return "round-robin"
+	}
+}
+
+func selectorForRoutingStrategy(strategy string) coreauth.Selector {
+	switch normalizeRoutingStrategy(strategy) {
+	case "fill-first":
+		return &coreauth.FillFirstSelector{}
+	case "quota-sticky":
+		return &coreauth.QuotaStickySelector{}
+	default:
+		return &coreauth.RoundRobinSelector{}
+	}
+}
+
 func (s *Service) ensureAuthUpdateQueue(ctx context.Context) {
 	if s == nil {
 		return
@@ -495,6 +517,9 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	s.applyRetryConfig(s.cfg)
+	if s.coreManager != nil {
+		s.coreManager.SetSelector(selectorForRoutingStrategy(s.cfg.Routing.Strategy))
+	}
 
 	if s.coreManager != nil {
 		if errLoad := s.coreManager.Load(ctx); errLoad != nil {
@@ -626,26 +651,10 @@ func (s *Service) Run(ctx context.Context) error {
 			return
 		}
 
-		nextStrategy := strings.ToLower(strings.TrimSpace(newCfg.Routing.Strategy))
-		normalizeStrategy := func(strategy string) string {
-			switch strategy {
-			case "fill-first", "fillfirst", "ff":
-				return "fill-first"
-			default:
-				return "round-robin"
-			}
-		}
-		previousStrategy = normalizeStrategy(previousStrategy)
-		nextStrategy = normalizeStrategy(nextStrategy)
+		nextStrategy := normalizeRoutingStrategy(newCfg.Routing.Strategy)
+		previousStrategy = normalizeRoutingStrategy(previousStrategy)
 		if s.coreManager != nil && previousStrategy != nextStrategy {
-			var selector coreauth.Selector
-			switch nextStrategy {
-			case "fill-first":
-				selector = &coreauth.FillFirstSelector{}
-			default:
-				selector = &coreauth.RoundRobinSelector{}
-			}
-			s.coreManager.SetSelector(selector)
+			s.coreManager.SetSelector(selectorForRoutingStrategy(nextStrategy))
 		}
 
 		s.applyRetryConfig(newCfg)
@@ -723,6 +732,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		if s.coreManager != nil {
 			s.coreManager.StopAutoRefresh()
+			s.coreManager.Close()
 		}
 		if s.watcher != nil {
 			if err := s.watcher.Stop(); err != nil {

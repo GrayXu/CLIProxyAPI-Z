@@ -46,6 +46,7 @@ type ErrorDetail struct {
 }
 
 const idempotencyKeyMetadataKey = "idempotency_key"
+const stickyConversationHeader = "X-CLIProxy-Session-Key"
 
 const (
 	defaultStreamingKeepAliveSeconds = 0
@@ -199,6 +200,9 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	}
 
 	meta := map[string]any{idempotencyKeyMetadataKey: key}
+	if stickyKey := stickyConversationKeyFromContext(ctx); stickyKey != "" {
+		meta[coreexecutor.StickyConversationMetadataKey] = stickyKey
+	}
 	if pinnedAuthID := pinnedAuthIDFromContext(ctx); pinnedAuthID != "" {
 		meta[coreexecutor.PinnedAuthMetadataKey] = pinnedAuthID
 	}
@@ -209,6 +213,35 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 		meta[coreexecutor.ExecutionSessionMetadataKey] = executionSessionID
 	}
 	return meta
+}
+
+func stickyConversationKeyFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil || ginCtx.Request == nil {
+		return ""
+	}
+	return strings.TrimSpace(ginCtx.GetHeader(stickyConversationHeader))
+}
+
+func hasStickyConversationMetadata(meta map[string]any) bool {
+	if len(meta) == 0 {
+		return false
+	}
+	raw, ok := meta[coreexecutor.StickyConversationMetadataKey]
+	if !ok || raw == nil {
+		return false
+	}
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value) != ""
+	case []byte:
+		return strings.TrimSpace(string(value)) != ""
+	default:
+		return false
+	}
 }
 
 func pinnedAuthIDFromContext(ctx context.Context) string {
@@ -474,6 +507,11 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	}
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
+	if !hasStickyConversationMetadata(reqMeta) {
+		if stickyKey := buildStickyConversationKey(handlerType, normalizedModel, rawJSON); stickyKey != "" {
+			reqMeta[coreexecutor.StickyConversationMetadataKey] = stickyKey
+		}
+	}
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil
@@ -520,6 +558,11 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	}
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
+	if !hasStickyConversationMetadata(reqMeta) {
+		if stickyKey := buildStickyConversationKey(handlerType, normalizedModel, rawJSON); stickyKey != "" {
+			reqMeta[coreexecutor.StickyConversationMetadataKey] = stickyKey
+		}
+	}
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil
@@ -570,6 +613,11 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 	}
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = normalizedModel
+	if !hasStickyConversationMetadata(reqMeta) {
+		if stickyKey := buildStickyConversationKey(handlerType, normalizedModel, rawJSON); stickyKey != "" {
+			reqMeta[coreexecutor.StickyConversationMetadataKey] = stickyKey
+		}
+	}
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil
