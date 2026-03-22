@@ -627,6 +627,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			close(closedCh)
 			remaining = closedCh
 		}
+		m.consumePriorityBoost(auth.ID)
 		return m.wrapStreamResult(ctx, auth.Clone(), provider, routeModel, streamResult.Headers, buffered, remaining), nil
 	}
 	if lastErr == nil {
@@ -1055,6 +1056,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				continue
 			}
 			m.MarkResult(execCtx, result)
+			m.consumePriorityBoost(auth.ID)
 			return resp, nil
 		}
 		if authErr != nil {
@@ -1138,6 +1140,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				continue
 			}
 			m.hook.OnResult(execCtx, result)
+			m.consumePriorityBoost(auth.ID)
 			return resp, nil
 		}
 		if authErr != nil {
@@ -2721,7 +2724,8 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 	updated.NextRefreshAfter = time.Time{}
 	updated.LastError = nil
 	updated.UpdatedAt = now
-	_, _ = m.Update(ctx, updated)
+	stored, _ := m.Update(ctx, updated)
+	m.setRefreshPriorityBoost(stored)
 }
 
 func (m *Manager) executorFor(provider string) ProviderExecutor {
@@ -2742,6 +2746,28 @@ func (m *Manager) roundTripperFor(auth *Auth) http.RoundTripper {
 		return nil
 	}
 	return p.RoundTripperFor(auth)
+}
+
+func refreshedAuthHasFullQuota(auth *Auth) bool {
+	if auth == nil || len(auth.Metadata) == 0 {
+		return false
+	}
+	score, ok := parseQuotaScoreValue(auth.Metadata[routingQuotaScoreMetadataKey])
+	return ok && score == 100
+}
+
+func (m *Manager) setRefreshPriorityBoost(auth *Auth) {
+	if m == nil || m.scheduler == nil || auth == nil {
+		return
+	}
+	m.scheduler.setPriorityBoost(auth.ID, refreshedAuthHasFullQuota(auth))
+}
+
+func (m *Manager) consumePriorityBoost(authID string) {
+	if m == nil || m.scheduler == nil {
+		return
+	}
+	m.scheduler.consumePriorityBoost(authID)
 }
 
 // RoundTripperProvider defines a minimal provider of per-auth HTTP transports.

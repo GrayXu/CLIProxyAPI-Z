@@ -193,6 +193,82 @@ func TestSchedulerPick_MixedProvidersQuotaStickyPrefersHighestQuotaScore(t *test
 	}
 }
 
+func TestSchedulerPick_RoundRobinTemporaryPriorityBoostOverridesBasePriority(t *testing.T) {
+	t.Parallel()
+
+	scheduler := newSchedulerForTest(
+		&RoundRobinSelector{},
+		&Auth{ID: "low", Provider: "gemini", Attributes: map[string]string{"priority": "0"}},
+		&Auth{ID: "high-a", Provider: "gemini", Attributes: map[string]string{"priority": "10"}},
+		&Auth{ID: "high-b", Provider: "gemini", Attributes: map[string]string{"priority": "10"}},
+	)
+	scheduler.setPriorityBoost("low", true)
+
+	got, errPick := scheduler.pickSingle(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != "low" {
+		t.Fatalf("pickSingle() auth = %v, want low", got)
+	}
+}
+
+func TestSchedulerPick_FillFirstTemporaryPriorityBoostOverridesBasePriority(t *testing.T) {
+	t.Parallel()
+
+	scheduler := newSchedulerForTest(
+		&FillFirstSelector{},
+		&Auth{ID: "low", Provider: "gemini", Attributes: map[string]string{"priority": "0"}},
+		&Auth{ID: "high-a", Provider: "gemini", Attributes: map[string]string{"priority": "10"}},
+		&Auth{ID: "high-b", Provider: "gemini", Attributes: map[string]string{"priority": "10"}},
+	)
+	scheduler.setPriorityBoost("low", true)
+
+	got, errPick := scheduler.pickSingle(context.Background(), "gemini", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != "low" {
+		t.Fatalf("pickSingle() auth = %v, want low", got)
+	}
+}
+
+func TestSchedulerPick_QuotaStickyTemporaryPriorityBoostWinsBeforeQuotaScore(t *testing.T) {
+	t.Parallel()
+
+	registerSchedulerModels(t, "gemini", "test-model", "low", "high-a", "high-b")
+	scheduler := newSchedulerForTest(
+		&QuotaStickySelector{},
+		&Auth{
+			ID:         "low",
+			Provider:   "gemini",
+			Attributes: map[string]string{"priority": "0"},
+			Metadata:   map[string]any{routingQuotaScoreMetadataKey: 1},
+		},
+		&Auth{
+			ID:         "high-a",
+			Provider:   "gemini",
+			Attributes: map[string]string{"priority": "10"},
+			Metadata:   map[string]any{routingQuotaScoreMetadataKey: 90},
+		},
+		&Auth{
+			ID:         "high-b",
+			Provider:   "gemini",
+			Attributes: map[string]string{"priority": "10"},
+			Metadata:   map[string]any{routingQuotaScoreMetadataKey: 80},
+		},
+	)
+	scheduler.setPriorityBoost("low", true)
+
+	got, errPick := scheduler.pickSingle(context.Background(), "gemini", "test-model", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != "low" {
+		t.Fatalf("pickSingle() auth = %v, want low", got)
+	}
+}
+
 func TestSchedulerPick_PromotesExpiredCooldownBeforePick(t *testing.T) {
 	t.Parallel()
 

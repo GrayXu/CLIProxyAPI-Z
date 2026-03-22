@@ -37,6 +37,7 @@ type authScheduler struct {
 	strategy      schedulerStrategy
 	providers     map[string]*providerScheduler
 	authProviders map[string]string
+	boostedAuths  map[string]struct{}
 	mixedCursors  map[string]int
 }
 
@@ -51,6 +52,7 @@ type providerScheduler struct {
 type scheduledAuthMeta struct {
 	auth              *Auth
 	providerKey       string
+	basePriority      int
 	priority          int
 	virtualParent     string
 	websocketEnabled  bool
@@ -98,12 +100,15 @@ type childBucket struct {
 // cooldownQueue is the blocked auth collection ordered by next retry time during rebuilds.
 type cooldownQueue []*scheduledAuth
 
+var temporaryPriorityBoostValue = int(^uint(0) >> 1)
+
 // newAuthScheduler constructs an empty scheduler configured for the supplied selector strategy.
 func newAuthScheduler(selector Selector) *authScheduler {
 	return &authScheduler{
 		strategy:      selectorStrategy(selector),
 		providers:     make(map[string]*providerScheduler),
 		authProviders: make(map[string]string),
+		boostedAuths:  make(map[string]struct{}),
 		mixedCursors:  make(map[string]int),
 	}
 }
@@ -143,6 +148,9 @@ func (s *authScheduler) rebuild(auths []*Auth) {
 	s.providers = make(map[string]*providerScheduler)
 	s.authProviders = make(map[string]string)
 	s.mixedCursors = make(map[string]int)
+	if s.boostedAuths == nil {
+		s.boostedAuths = make(map[string]struct{})
+	}
 	now := time.Now()
 	for _, auth := range auths {
 		s.upsertAuthLocked(auth, now)
@@ -435,7 +443,7 @@ func (s *authScheduler) upsertAuthLocked(auth *Auth, now time.Time) {
 			previousState.removeAuthLocked(authID)
 		}
 	}
-	meta := buildScheduledAuthMeta(auth)
+	meta := buildScheduledAuthMeta(auth, s.authHasPriorityBoostLocked(authID))
 	s.authProviders[authID] = providerKey
 	s.ensureProviderLocked(providerKey).upsertAuthLocked(meta, now)
 }
@@ -445,12 +453,77 @@ func (s *authScheduler) removeAuthLocked(authID string) {
 	if authID == "" {
 		return
 	}
+	delete(s.boostedAuths, authID)
 	if providerKey := s.authProviders[authID]; providerKey != "" {
 		if providerState := s.providers[providerKey]; providerState != nil {
 			providerState.removeAuthLocked(authID)
 		}
 		delete(s.authProviders, authID)
 	}
+}
+
+func (s *authScheduler) authHasPriorityBoostLocked(authID string) bool {
+	if authID == "" || len(s.boostedAuths) == 0 {
+		return false
+	}
+	_, ok := s.boostedAuths[authID]
+	return ok
+}
+
+func (s *authScheduler) setPriorityBoost(authID string, enabled bool) {
+	if s == nil {
+		return
+	}
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setPriorityBoostLocked(authID, enabled, time.Now())
+}
+
+func (s *authScheduler) consumePriorityBoost(authID string) {
+	if s == nil {
+		return
+	}
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setPriorityBoostLocked(authID, false, time.Now())
+}
+
+func (s *authScheduler) setPriorityBoostLocked(authID string, enabled bool, now time.Time) {
+	if authID == "" {
+		return
+	}
+	if s.boostedAuths == nil {
+		s.boostedAuths = make(map[string]struct{})
+	}
+	_, wasBoosted := s.boostedAuths[authID]
+	if enabled {
+		if wasBoosted {
+			return
+		}
+		s.boostedAuths[authID] = struct{}{}
+	} else {
+		if !wasBoosted {
+			return
+		}
+		delete(s.boostedAuths, authID)
+	}
+	providerKey := s.authProviders[authID]
+	if providerKey == "" {
+		return
+	}
+	providerState := s.providers[providerKey]
+	if providerState == nil {
+		return
+	}
+	providerState.setPriorityBoostLocked(authID, enabled, now)
 }
 
 // ensureProviderLocked returns the provider scheduler for providerKey, creating it when needed.
@@ -471,20 +544,29 @@ func (s *authScheduler) ensureProviderLocked(providerKey string) *providerSchedu
 }
 
 // buildScheduledAuthMeta extracts the scheduling metadata needed for shard bookkeeping.
-func buildScheduledAuthMeta(auth *Auth) *scheduledAuthMeta {
+func buildScheduledAuthMeta(auth *Auth, boosted bool) *scheduledAuthMeta {
 	providerKey := strings.ToLower(strings.TrimSpace(auth.Provider))
 	virtualParent := ""
 	if auth.Attributes != nil {
 		virtualParent = strings.TrimSpace(auth.Attributes["gemini_virtual_parent"])
 	}
+	basePriority := authPriority(auth)
 	return &scheduledAuthMeta{
 		auth:              auth,
 		providerKey:       providerKey,
-		priority:          authPriority(auth),
+		basePriority:      basePriority,
+		priority:          effectiveAuthPriority(basePriority, boosted),
 		virtualParent:     virtualParent,
 		websocketEnabled:  authWebsocketsEnabled(auth),
 		supportedModelSet: supportedModelSetForAuth(auth.ID),
 	}
+}
+
+func effectiveAuthPriority(basePriority int, boosted bool) int {
+	if boosted {
+		return temporaryPriorityBoostValue
+	}
+	return basePriority
 }
 
 // supportedModelSetForAuth snapshots the registry models currently registered for an auth.
@@ -523,6 +605,30 @@ func (p *providerScheduler) upsertAuthLocked(meta *scheduledAuthMeta, now time.T
 		}
 		if !meta.supportsModel(modelKey) {
 			shard.removeEntryLocked(meta.auth.ID)
+			continue
+		}
+		shard.upsertEntryLocked(meta, now)
+	}
+}
+
+func (p *providerScheduler) setPriorityBoostLocked(authID string, enabled bool, now time.Time) {
+	if p == nil || authID == "" {
+		return
+	}
+	meta := p.auths[authID]
+	if meta == nil {
+		return
+	}
+	nextPriority := effectiveAuthPriority(meta.basePriority, enabled)
+	if meta.priority == nextPriority {
+		return
+	}
+	updatedMeta := *meta
+	updatedMeta.priority = nextPriority
+	meta = &updatedMeta
+	p.auths[authID] = meta
+	for modelKey, shard := range p.modelShards {
+		if shard == nil || !meta.supportsModel(modelKey) {
 			continue
 		}
 		shard.upsertEntryLocked(meta, now)
