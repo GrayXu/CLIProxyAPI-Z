@@ -2760,14 +2760,22 @@ func (m *Manager) setRefreshPriorityBoost(auth *Auth) {
 	if m == nil || m.scheduler == nil || auth == nil {
 		return
 	}
-	m.scheduler.setPriorityBoost(auth.ID, refreshedAuthHasFullQuota(auth))
+	if refreshedAuthHasFullQuota(auth) {
+		if m.scheduler.setPriorityBoost(auth.ID, true) {
+			log.Infof("armed temporary priority boost for auth %s after refresh (provider=%s, quota_score=100)", auth.ID, auth.Provider)
+		}
+		return
+	}
+	m.scheduler.setPriorityBoost(auth.ID, false)
 }
 
 func (m *Manager) consumePriorityBoost(authID string) {
 	if m == nil || m.scheduler == nil {
 		return
 	}
-	m.scheduler.consumePriorityBoost(authID)
+	if m.scheduler.consumePriorityBoost(authID) {
+		log.Infof("consumed temporary priority boost for auth %s after successful request", authID)
+	}
 }
 
 // RoundTripperProvider defines a minimal provider of per-auth HTTP transports.

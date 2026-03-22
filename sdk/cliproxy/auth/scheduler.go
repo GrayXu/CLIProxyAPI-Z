@@ -470,35 +470,35 @@ func (s *authScheduler) authHasPriorityBoostLocked(authID string) bool {
 	return ok
 }
 
-func (s *authScheduler) setPriorityBoost(authID string, enabled bool) {
+func (s *authScheduler) setPriorityBoost(authID string, enabled bool) bool {
 	if s == nil {
-		return
+		return false
 	}
 	authID = strings.TrimSpace(authID)
 	if authID == "" {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.setPriorityBoostLocked(authID, enabled, time.Now())
+	return s.setPriorityBoostLocked(authID, enabled, time.Now())
 }
 
-func (s *authScheduler) consumePriorityBoost(authID string) {
+func (s *authScheduler) consumePriorityBoost(authID string) bool {
 	if s == nil {
-		return
+		return false
 	}
 	authID = strings.TrimSpace(authID)
 	if authID == "" {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.setPriorityBoostLocked(authID, false, time.Now())
+	return s.setPriorityBoostLocked(authID, false, time.Now())
 }
 
-func (s *authScheduler) setPriorityBoostLocked(authID string, enabled bool, now time.Time) {
+func (s *authScheduler) setPriorityBoostLocked(authID string, enabled bool, now time.Time) bool {
 	if authID == "" {
-		return
+		return false
 	}
 	if s.boostedAuths == nil {
 		s.boostedAuths = make(map[string]struct{})
@@ -506,24 +506,25 @@ func (s *authScheduler) setPriorityBoostLocked(authID string, enabled bool, now 
 	_, wasBoosted := s.boostedAuths[authID]
 	if enabled {
 		if wasBoosted {
-			return
+			return false
 		}
 		s.boostedAuths[authID] = struct{}{}
 	} else {
 		if !wasBoosted {
-			return
+			return false
 		}
 		delete(s.boostedAuths, authID)
 	}
 	providerKey := s.authProviders[authID]
 	if providerKey == "" {
-		return
+		return true
 	}
 	providerState := s.providers[providerKey]
 	if providerState == nil {
-		return
+		return true
 	}
 	providerState.setPriorityBoostLocked(authID, enabled, now)
+	return true
 }
 
 // ensureProviderLocked returns the provider scheduler for providerKey, creating it when needed.
