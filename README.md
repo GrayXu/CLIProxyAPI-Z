@@ -1,6 +1,6 @@
 # CLI Proxy API
 
-## New since `db63f9b`
+## What We Do In This Fork
 
 - SQLite-backed usage statistics persistence
 - Codex usage tracking for `service_tier` and requested fast mode
