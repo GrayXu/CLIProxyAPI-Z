@@ -16,7 +16,7 @@ import (
 const (
 	routingQuotaScoreMetadataKey  = "routing_quota_score"
 	routingQuotaScoresMetadataKey = "routing_quota_scores"
-	stickyRouteTTL                = 24 * time.Hour
+	stickyRouteTTL                = 1 * time.Hour
 	stickyRouteMaxEntries         = 10000
 	stickyRouteShardCount         = 64
 	stickyRouteCleanupInterval    = 5 * time.Minute
