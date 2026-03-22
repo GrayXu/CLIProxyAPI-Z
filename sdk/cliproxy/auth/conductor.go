@@ -251,6 +251,16 @@ func (m *Manager) SetSelector(selector Selector) {
 	}
 }
 
+func (m *Manager) stickyRoutingEnabled() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.selector.(*QuotaStickySelector)
+	return ok
+}
+
 // SetStore swaps the underlying persistence store.
 func (m *Manager) SetStore(store Store) {
 	m.mu.Lock()
@@ -989,7 +999,10 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			}
 			return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		stickyState := m.stickySelectionState(providers, routeModel, opts, tried)
+		stickyState := stickySelectionState{}
+		if m.stickyRoutingEnabled() {
+			stickyState = m.stickySelectionState(providers, routeModel, opts, tried)
+		}
 		pickOpts := opts
 		if stickyState.pinnedAuthID != "" {
 			pickOpts = withPinnedAuthMetadata(opts, stickyState.pinnedAuthID)
@@ -1069,7 +1082,10 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			}
 			return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		stickyState := m.stickySelectionState(providers, routeModel, opts, tried)
+		stickyState := stickySelectionState{}
+		if m.stickyRoutingEnabled() {
+			stickyState = m.stickySelectionState(providers, routeModel, opts, tried)
+		}
 		pickOpts := opts
 		if stickyState.pinnedAuthID != "" {
 			pickOpts = withPinnedAuthMetadata(opts, stickyState.pinnedAuthID)
@@ -1149,7 +1165,10 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
-		stickyState := m.stickySelectionState(providers, routeModel, opts, tried)
+		stickyState := stickySelectionState{}
+		if m.stickyRoutingEnabled() {
+			stickyState = m.stickySelectionState(providers, routeModel, opts, tried)
+		}
 		pickOpts := opts
 		if stickyState.pinnedAuthID != "" {
 			pickOpts = withPinnedAuthMetadata(opts, stickyState.pinnedAuthID)

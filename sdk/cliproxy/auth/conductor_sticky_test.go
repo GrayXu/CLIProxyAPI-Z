@@ -91,6 +91,29 @@ func newQuotaStickyTestManager(t *testing.T, auths ...*Auth) (*Manager, *stickyT
 	return manager, executor
 }
 
+func newRoundRobinStickyTestManager(t *testing.T, auths ...*Auth) (*Manager, *stickyTrackingExecutor) {
+	t.Helper()
+	executor := &stickyTrackingExecutor{id: "gemini"}
+	manager := NewManager(nil, &RoundRobinSelector{}, nil)
+	t.Cleanup(manager.Close)
+	manager.RegisterExecutor(executor)
+	for _, auth := range auths {
+		if _, err := manager.Register(context.Background(), auth); err != nil {
+			t.Fatalf("register auth %s: %v", auth.ID, err)
+		}
+	}
+	reg := registry.GetGlobalRegistry()
+	for _, auth := range auths {
+		reg.RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	}
+	t.Cleanup(func() {
+		for _, auth := range auths {
+			reg.UnregisterClient(auth.ID)
+		}
+	})
+	return manager, executor
+}
+
 func TestManagerExecute_QuotaStickyBindsConversationToFirstSelectedAuth(t *testing.T) {
 	t.Parallel()
 
@@ -200,6 +223,50 @@ func TestManagerExecute_QuotaStickyRebindsWhenMappedAuthBecomesUnavailable(t *te
 
 	got := executor.AuthIDs()
 	want := []string{authBID, authAID, authAID}
+	if len(got) != len(want) {
+		t.Fatalf("auth IDs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("auth IDs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestManagerExecute_RoundRobinIgnoresStickyConversationBinding(t *testing.T) {
+	t.Parallel()
+
+	authAID := "auth-a-" + t.Name()
+	authBID := "auth-b-" + t.Name()
+	authA := &Auth{
+		ID:       authAID,
+		Provider: "gemini",
+		Status:   StatusActive,
+	}
+	authB := &Auth{
+		ID:       authBID,
+		Provider: "gemini",
+		Status:   StatusActive,
+	}
+	manager, executor := newRoundRobinStickyTestManager(t, authA, authB)
+
+	opts := cliproxyexecutor.Options{
+		Metadata: map[string]any{
+			cliproxyexecutor.StickyConversationMetadataKey: "conv-rr",
+		},
+	}
+	if _, err := manager.Execute(context.Background(), []string{"gemini"}, cliproxyexecutor.Request{Model: "test-model"}, opts); err != nil {
+		t.Fatalf("first execute: %v", err)
+	}
+	if _, err := manager.Execute(context.Background(), []string{"gemini"}, cliproxyexecutor.Request{Model: "test-model"}, opts); err != nil {
+		t.Fatalf("second execute: %v", err)
+	}
+	if _, err := manager.Execute(context.Background(), []string{"gemini"}, cliproxyexecutor.Request{Model: "test-model"}, opts); err != nil {
+		t.Fatalf("third execute: %v", err)
+	}
+
+	got := executor.AuthIDs()
+	want := []string{authAID, authBID, authAID}
 	if len(got) != len(want) {
 		t.Fatalf("auth IDs = %v, want %v", got, want)
 	}
