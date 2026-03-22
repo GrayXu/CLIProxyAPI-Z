@@ -1,5 +1,13 @@
 # CLI Proxy API
 
+## New since `db63f9b`
+
+- SQLite-backed usage statistics persistence
+- Codex usage tracking for `service_tier` and requested fast mode
+- Bundled default management control panel HTML
+- `quota-sticky` routing strategy
+- One-shot priority boost for auths refreshed with `routing_quota_score == 100`
+
 English | [中文](README_CN.md)
 
 A proxy server that provides OpenAI/Gemini/Claude/Codex compatible API interfaces for CLI.
