@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Select } from '@/components/ui/Select';
+import { useSessionStore } from '@/stores';
 import { authFilesApi } from '@/services/api/authFiles';
 import type { GeminiKeyConfig, ProviderKeyConfig, OpenAIProviderConfig } from '@/types';
 import type { AuthFileItem } from '@/types/authFile';
@@ -46,6 +47,7 @@ type RequestEventRow = {
 export interface RequestEventsDetailsCardProps {
   usage: unknown;
   loading: boolean;
+  allowExport: boolean;
   geminiKeys: GeminiKeyConfig[];
   claudeConfigs: ProviderKeyConfig[];
   codexConfigs: ProviderKeyConfig[];
@@ -69,6 +71,7 @@ const encodeCsv = (value: string | number): string => {
 export function RequestEventsDetailsCard({
   usage,
   loading,
+  allowExport,
   geminiKeys,
   claudeConfigs,
   codexConfigs,
@@ -76,6 +79,7 @@ export function RequestEventsDetailsCard({
   openaiProviders
 }: RequestEventsDetailsCardProps) {
   const { t, i18n } = useTranslation();
+  const canViewAuthFiles = useSessionStore((state) => state.isRouteAllowed('/auth-files'));
 
   const [modelFilter, setModelFilter] = useState(ALL_FILTER);
   const [sourceFilter, setSourceFilter] = useState(ALL_FILTER);
@@ -83,6 +87,10 @@ export function RequestEventsDetailsCard({
   const [authFileMap, setAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
 
   useEffect(() => {
+    if (!canViewAuthFiles) {
+      setAuthFileMap(new Map());
+      return;
+    }
     let cancelled = false;
     authFilesApi
       .list()
@@ -105,7 +113,7 @@ export function RequestEventsDetailsCard({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [canViewAuthFiles]);
 
   const sourceInfoMap = useMemo(
     () =>
@@ -350,22 +358,26 @@ export function RequestEventsDetailsCard({
           >
             {t('usage_stats.clear_filters')}
           </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleExportCsv}
-            disabled={filteredRows.length === 0}
-          >
-            {t('usage_stats.export_csv')}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleExportJson}
-            disabled={filteredRows.length === 0}
-          >
-            {t('usage_stats.export_json')}
-          </Button>
+          {allowExport && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleExportCsv}
+              disabled={filteredRows.length === 0}
+            >
+              {t('usage_stats.export_csv')}
+            </Button>
+          )}
+          {allowExport && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleExportJson}
+              disabled={filteredRows.length === 0}
+            >
+              {t('usage_stats.export_json')}
+            </Button>
+          )}
         </div>
       }
     >

@@ -10,6 +10,7 @@ import {
   useConfigStore,
   useNotificationStore,
   useModelsStore,
+  useSessionStore,
   useThemeStore,
 } from '@/stores';
 import { configApi, versionApi } from '@/services/api';
@@ -82,6 +83,9 @@ export function SystemPage() {
   const modelsLoading = useModelsStore((state) => state.loading);
   const modelsError = useModelsStore((state) => state.error);
   const fetchModelsFromStore = useModelsStore((state) => state.fetchModels);
+  const clearModelsCache = useModelsStore((state) => state.clearCache);
+  const canEditConfig = useSessionStore((state) => state.hasCapability('config_edit'));
+  const canViewSystemModels = useSessionStore((state) => state.hasCapability('system_models'));
 
   const [modelStatus, setModelStatus] = useState<{
     type: 'success' | 'warning' | 'error' | 'muted';
@@ -104,7 +108,8 @@ export function SystemPage() {
   const groupedModels = useMemo(() => classifyModels(models, { otherLabel }), [models, otherLabel]);
   const requestLogEnabled = config?.requestLog ?? false;
   const requestLogDirty = requestLogDraft !== requestLogEnabled;
-  const canEditRequestLog = auth.connectionStatus === 'connected' && Boolean(config);
+  const canEditRequestLog =
+    auth.connectionStatus === 'connected' && Boolean(config) && canEditConfig;
 
   const appVersion = __APP_VERSION__ || t('system_info.version_unknown');
   const apiVersion = auth.serverVersion || t('system_info.version_unknown');
@@ -145,6 +150,9 @@ export function SystemPage() {
   };
 
   const resolveApiKeysForModels = useCallback(async () => {
+    if (!canViewSystemModels) {
+      return [];
+    }
     if (apiKeysCache.current.length) {
       return apiKeysCache.current;
     }
@@ -166,9 +174,14 @@ export function SystemPage() {
       console.warn('Auto loading API keys for models failed:', err);
       return [];
     }
-  }, [config?.apiKeys]);
+  }, [canViewSystemModels, config?.apiKeys]);
 
   const fetchModels = async ({ forceRefresh = false }: { forceRefresh?: boolean } = {}) => {
+    if (!canViewSystemModels) {
+      clearModelsCache();
+      setModelStatus(undefined);
+      return;
+    }
     if (auth.connectionStatus !== 'connected') {
       setModelStatus({
         type: 'warning',
@@ -229,6 +242,9 @@ export function SystemPage() {
   }, [requestLogEnabled]);
 
   const handleInfoVersionTap = useCallback(() => {
+    if (!canEditConfig) {
+      return;
+    }
     versionTapCount.current += 1;
     if (versionTapTimer.current) {
       clearTimeout(versionTapTimer.current);
@@ -245,7 +261,7 @@ export function SystemPage() {
       versionTapCount.current = 0;
       versionTapTimer.current = null;
     }, 1500);
-  }, [openRequestLogModal]);
+  }, [canEditConfig, openRequestLogModal]);
 
   const handleRequestLogClose = useCallback(() => {
     setRequestLogModalOpen(false);
@@ -335,9 +351,14 @@ export function SystemPage() {
   }, []);
 
   useEffect(() => {
+    if (!canViewSystemModels) {
+      clearModelsCache();
+      setModelStatus(undefined);
+      return;
+    }
     fetchModels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.connectionStatus, auth.apiBase]);
+  }, [auth.connectionStatus, auth.apiBase, canViewSystemModels, clearModelsCache]);
 
   return (
     <div className={styles.container}>
@@ -350,16 +371,25 @@ export function SystemPage() {
           </div>
 
           <div className={styles.aboutInfoGrid}>
-            <button
-              type="button"
-              className={`${styles.infoTile} ${styles.tapTile}`}
-              onClick={handleInfoVersionTap}
-            >
-              <div className={styles.tileHeader}>
-                <div className={styles.tileLabel}>{t('footer.version')}</div>
+            {canEditConfig ? (
+              <button
+                type="button"
+                className={`${styles.infoTile} ${styles.tapTile}`}
+                onClick={handleInfoVersionTap}
+              >
+                <div className={styles.tileHeader}>
+                  <div className={styles.tileLabel}>{t('footer.version')}</div>
+                </div>
+                <div className={styles.tileValue}>{appVersion}</div>
+              </button>
+            ) : (
+              <div className={styles.infoTile}>
+                <div className={styles.tileHeader}>
+                  <div className={styles.tileLabel}>{t('footer.version')}</div>
+                </div>
+                <div className={styles.tileValue}>{appVersion}</div>
               </div>
-              <div className={styles.tileValue}>{appVersion}</div>
-            </button>
+            )}
 
             <div className={styles.infoTile}>
               <div className={styles.tileHeader}>
@@ -452,61 +482,63 @@ export function SystemPage() {
           </div>
         </Card>
 
-        <Card
-          title={t('system_info.models_title')}
-          extra={
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => fetchModels({ forceRefresh: true })}
-              loading={modelsLoading}
-            >
-              {t('common.refresh')}
-            </Button>
-          }
-        >
-          <p className={styles.sectionDescription}>{t('system_info.models_desc')}</p>
-          {modelStatus && (
-            <div className={`status-badge ${modelStatus.type}`}>{modelStatus.message}</div>
-          )}
-          {modelsError && <div className="error-box">{modelsError}</div>}
-          {modelsLoading ? (
-            <div className="hint">{t('common.loading')}</div>
-          ) : models.length === 0 ? (
-            <div className="hint">{t('system_info.models_empty')}</div>
-          ) : (
-            <div className="item-list">
-              {groupedModels.map((group) => {
-                const iconSrc = getIconForCategory(group.id);
-                return (
-                  <div key={group.id} className="item-row">
-                    <div className="item-meta">
-                      <div className={styles.groupTitle}>
-                        {iconSrc && <img src={iconSrc} alt="" className={styles.groupIcon} />}
-                        <span className="item-title">{group.label}</span>
+        {canViewSystemModels && (
+          <Card
+            title={t('system_info.models_title')}
+            extra={
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => fetchModels({ forceRefresh: true })}
+                loading={modelsLoading}
+              >
+                {t('common.refresh')}
+              </Button>
+            }
+          >
+            <p className={styles.sectionDescription}>{t('system_info.models_desc')}</p>
+            {modelStatus && (
+              <div className={`status-badge ${modelStatus.type}`}>{modelStatus.message}</div>
+            )}
+            {modelsError && <div className="error-box">{modelsError}</div>}
+            {modelsLoading ? (
+              <div className="hint">{t('common.loading')}</div>
+            ) : models.length === 0 ? (
+              <div className="hint">{t('system_info.models_empty')}</div>
+            ) : (
+              <div className="item-list">
+                {groupedModels.map((group) => {
+                  const iconSrc = getIconForCategory(group.id);
+                  return (
+                    <div key={group.id} className="item-row">
+                      <div className="item-meta">
+                        <div className={styles.groupTitle}>
+                          {iconSrc && <img src={iconSrc} alt="" className={styles.groupIcon} />}
+                          <span className="item-title">{group.label}</span>
+                        </div>
+                        <div className="item-subtitle">
+                          {t('system_info.models_count', { count: group.items.length })}
+                        </div>
                       </div>
-                      <div className="item-subtitle">
-                        {t('system_info.models_count', { count: group.items.length })}
+                      <div className={styles.modelTags}>
+                        {group.items.map((model) => (
+                          <span
+                            key={`${model.name}-${model.alias ?? 'default'}`}
+                            className={styles.modelTag}
+                            title={model.description || ''}
+                          >
+                            <span className={styles.modelName}>{model.name}</span>
+                            {model.alias && <span className={styles.modelAlias}>{model.alias}</span>}
+                          </span>
+                        ))}
                       </div>
                     </div>
-                    <div className={styles.modelTags}>
-                      {group.items.map((model) => (
-                        <span
-                          key={`${model.name}-${model.alias ?? 'default'}`}
-                          className={styles.modelTag}
-                          title={model.description || ''}
-                        >
-                          <span className={styles.modelName}>{model.name}</span>
-                          {model.alias && <span className={styles.modelAlias}>{model.alias}</span>}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        )}
 
         <Card title={t('system_info.clear_login_title')}>
           <p className={styles.sectionDescription}>{t('system_info.clear_login_desc')}</p>
@@ -518,39 +550,41 @@ export function SystemPage() {
         </Card>
       </div>
 
-      <Modal
-        open={requestLogModalOpen}
-        onClose={handleRequestLogClose}
-        title={t('basic_settings.request_log_title')}
-        footer={
-          <>
-            <Button variant="secondary" onClick={handleRequestLogClose} disabled={requestLogSaving}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              onClick={handleRequestLogSave}
-              loading={requestLogSaving}
-              disabled={!canEditRequestLog || !requestLogDirty}
-            >
-              {t('common.save')}
-            </Button>
-          </>
-        }
-      >
-        <div className="request-log-modal">
-          <div className="status-badge warning">{t('basic_settings.request_log_warning')}</div>
-          <ToggleSwitch
-            label={t('basic_settings.request_log_enable')}
-            labelPosition="left"
-            checked={requestLogDraft}
-            disabled={!canEditRequestLog || requestLogSaving}
-            onChange={(value) => {
-              setRequestLogDraft(value);
-              setRequestLogTouched(true);
-            }}
-          />
-        </div>
-      </Modal>
+      {canEditConfig && (
+        <Modal
+          open={requestLogModalOpen}
+          onClose={handleRequestLogClose}
+          title={t('basic_settings.request_log_title')}
+          footer={
+            <>
+              <Button variant="secondary" onClick={handleRequestLogClose} disabled={requestLogSaving}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                onClick={handleRequestLogSave}
+                loading={requestLogSaving}
+                disabled={!canEditRequestLog || !requestLogDirty}
+              >
+                {t('common.save')}
+              </Button>
+            </>
+          }
+        >
+          <div className="request-log-modal">
+            <div className="status-badge warning">{t('basic_settings.request_log_warning')}</div>
+            <ToggleSwitch
+              label={t('basic_settings.request_log_enable')}
+              labelPosition="left"
+              checked={requestLogDraft}
+              disabled={!canEditRequestLog || requestLogSaving}
+              onChange={(value) => {
+                setRequestLogDraft(value);
+                setRequestLogTouched(true);
+              }}
+            />
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

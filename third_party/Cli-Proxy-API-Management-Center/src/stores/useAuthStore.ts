@@ -11,6 +11,7 @@ import { secureStorage } from '@/services/storage/secureStorage';
 import { apiClient } from '@/services/api/client';
 import { useConfigStore } from './useConfigStore';
 import { useUsageStatsStore } from './useUsageStatsStore';
+import { useSessionStore } from './useSessionStore';
 import { detectApiBaseFromLocation, normalizeApiBase } from '@/utils/connection';
 
 interface AuthStoreState extends AuthState {
@@ -103,6 +104,7 @@ export const useAuthStore = create<AuthStoreState>()(
 
           // 测试连接 - 获取配置
           await useConfigStore.getState().fetchConfig(undefined, true);
+          await useSessionStore.getState().fetchSession(true);
 
           // 登录成功
           set({
@@ -138,6 +140,7 @@ export const useAuthStore = create<AuthStoreState>()(
         restoreSessionPromise = null;
         useConfigStore.getState().clearCache();
         useUsageStatsStore.getState().clearUsageStats();
+        useSessionStore.getState().clearSession();
         set({
           isAuthenticated: false,
           apiBase: '',
@@ -164,6 +167,7 @@ export const useAuthStore = create<AuthStoreState>()(
 
           // 验证连接
           await useConfigStore.getState().fetchConfig();
+          await useSessionStore.getState().fetchSession(true);
 
           set({
             isAuthenticated: true,

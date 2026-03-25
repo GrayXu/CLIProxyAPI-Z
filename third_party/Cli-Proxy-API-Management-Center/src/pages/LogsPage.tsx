@@ -22,7 +22,7 @@ import {
 } from '@/components/ui/icons';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
-import { useAuthStore, useConfigStore, useNotificationStore } from '@/stores';
+import { useAuthStore, useConfigStore, useNotificationStore, useSessionStore } from '@/stores';
 import { logsApi } from '@/services/api/logs';
 import { copyToClipboard } from '@/utils/clipboard';
 import { downloadBlob } from '@/utils/download';
@@ -72,6 +72,12 @@ export function LogsPage() {
   const managementKey = useAuthStore((state) => state.managementKey);
   const traceScopeKey = `${apiBase}::${managementKey}`;
   const config = useConfigStore((state) => state.config);
+  const canDownloadLogs = useSessionStore((state) => state.hasCapability('logs_download'));
+  const canClearLogs = useSessionStore((state) => state.hasCapability('logs_clear'));
+  const canViewErrorLogs = useSessionStore((state) => state.hasCapability('error_logs'));
+  const canDownloadRequestLog = useSessionStore((state) =>
+    state.hasCapability('request_log_download')
+  );
   const requestLogEnabled = config?.requestLog ?? false;
 
   const [activeTab, setActiveTab] = useState<TabType>('logs');
@@ -196,6 +202,7 @@ export function LogsPage() {
   useHeaderRefresh(() => loadLogs(false));
 
   const clearLogs = async () => {
+    if (!canClearLogs) return;
     showConfirmation({
       title: t('logs.clear_confirm_title', { defaultValue: 'Clear Logs' }),
       message: t('logs.clear_confirm'),
@@ -219,12 +226,19 @@ export function LogsPage() {
   };
 
   const downloadLogs = () => {
+    if (!canDownloadLogs) return;
     const text = logState.buffer.join('\n');
     downloadBlob({ filename: 'logs.txt', blob: new Blob([text], { type: 'text/plain' }) });
     showNotification(t('logs.download_success'), 'success');
   };
 
   const loadErrorLogs = async () => {
+    if (!canViewErrorLogs) {
+      setLoadingErrors(false);
+      setErrorLogs([]);
+      setErrorLogsError('');
+      return;
+    }
     if (connectionStatus !== 'connected') {
       setLoadingErrors(false);
       return;
@@ -249,6 +263,7 @@ export function LogsPage() {
   };
 
   const downloadErrorLog = async (name: string) => {
+    if (!canViewErrorLogs) return;
     try {
       const response = await logsApi.downloadErrorLog(name);
       downloadBlob({ filename: name, blob: new Blob([response.data], { type: 'text/plain' }) });
@@ -271,11 +286,18 @@ export function LogsPage() {
   }, [connectionStatus]);
 
   useEffect(() => {
+    if (!canViewErrorLogs && activeTab === 'errors') {
+      setActiveTab('logs');
+    }
+  }, [activeTab, canViewErrorLogs]);
+
+  useEffect(() => {
     if (activeTab !== 'errors') return;
     if (connectionStatus !== 'connected') return;
+    if (!canViewErrorLogs) return;
     void loadErrorLogs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, connectionStatus, requestLogEnabled]);
+  }, [activeTab, canViewErrorLogs, connectionStatus, requestLogEnabled]);
 
   useEffect(() => {
     if (!autoRefresh || connectionStatus !== 'connected') {
@@ -390,6 +412,7 @@ export function LogsPage() {
   };
 
   const startLongPress = (event: ReactPointerEvent<HTMLDivElement>, id?: string) => {
+    if (!canDownloadRequestLog) return;
     if (!requestLogEnabled) return;
     if (!id) return;
     if (requestLogId) return;
@@ -429,6 +452,7 @@ export function LogsPage() {
   };
 
   const downloadRequestLog = async (id: string) => {
+    if (!canDownloadRequestLog) return;
     setRequestLogDownloading(true);
     try {
       const response = await logsApi.downloadRequestLogById(id);
@@ -470,13 +494,15 @@ export function LogsPage() {
         >
           {t('logs.log_content')}
         </button>
-        <button
-          type="button"
-          className={`${styles.tabItem} ${activeTab === 'errors' ? styles.tabActive : ''}`}
-          onClick={() => setActiveTab('errors')}
-        >
-          {t('logs.error_logs_modal_title')}
-        </button>
+        {canViewErrorLogs && (
+          <button
+            type="button"
+            className={`${styles.tabItem} ${activeTab === 'errors' ? styles.tabActive : ''}`}
+            onClick={() => setActiveTab('errors')}
+          >
+            {t('logs.error_logs_modal_title')}
+          </button>
+        )}
       </div>
 
       <div className={styles.content}>
@@ -674,30 +700,34 @@ export function LogsPage() {
                     </span>
                   }
                 />
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={downloadLogs}
-                  disabled={logState.buffer.length === 0}
-                  className={styles.actionButton}
-                >
-                  <span className={styles.buttonContent}>
-                    <IconDownload size={16} />
-                    {t('logs.download_button')}
-                  </span>
-                </Button>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  onClick={clearLogs}
-                  disabled={disableControls}
-                  className={styles.actionButton}
-                >
-                  <span className={styles.buttonContent}>
-                    <IconTrash2 size={16} />
-                    {t('logs.clear_button')}
-                  </span>
-                </Button>
+                {canDownloadLogs && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={downloadLogs}
+                    disabled={logState.buffer.length === 0}
+                    className={styles.actionButton}
+                  >
+                    <span className={styles.buttonContent}>
+                      <IconDownload size={16} />
+                      {t('logs.download_button')}
+                    </span>
+                  </Button>
+                )}
+                {canClearLogs && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={clearLogs}
+                    disabled={disableControls}
+                    className={styles.actionButton}
+                  >
+                    <span className={styles.buttonContent}>
+                      <IconTrash2 size={16} />
+                      {t('logs.clear_button')}
+                    </span>
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -925,7 +955,7 @@ export function LogsPage() {
         title={t('logs.trace_title')}
         footer={
           <>
-            {trace.traceLogLine?.requestId && (
+            {canDownloadRequestLog && trace.traceLogLine?.requestId && (
               <Button
                 variant="secondary"
                 onClick={() => {
@@ -1087,31 +1117,33 @@ export function LogsPage() {
         )}
       </Modal>
 
-      <Modal
-        open={Boolean(requestLogId)}
-        onClose={closeRequestLogModal}
-        title={t('logs.request_log_download_title')}
-        footer={
-          <>
-            <Button variant="secondary" onClick={closeRequestLogModal} disabled={requestLogDownloading}>
-              {t('common.cancel')}
-            </Button>
-            <Button
-              onClick={() => {
-                if (requestLogId) {
-                  void downloadRequestLog(requestLogId);
-                }
-              }}
-              loading={requestLogDownloading}
-              disabled={!requestLogId}
-            >
-              {t('common.confirm')}
-            </Button>
-          </>
-        }
-      >
-        {requestLogId ? t('logs.request_log_download_confirm', { id: requestLogId }) : null}
-      </Modal>
+      {canDownloadRequestLog && (
+        <Modal
+          open={Boolean(requestLogId)}
+          onClose={closeRequestLogModal}
+          title={t('logs.request_log_download_title')}
+          footer={
+            <>
+              <Button variant="secondary" onClick={closeRequestLogModal} disabled={requestLogDownloading}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                onClick={() => {
+                  if (requestLogId) {
+                    void downloadRequestLog(requestLogId);
+                  }
+                }}
+                loading={requestLogDownloading}
+                disabled={!requestLogId}
+              >
+                {t('common.confirm')}
+              </Button>
+            </>
+          }
+        >
+          {requestLogId ? t('logs.request_log_download_confirm', { id: requestLogId }) : null}
+        </Modal>
+      )}
     </div>
   );
 }

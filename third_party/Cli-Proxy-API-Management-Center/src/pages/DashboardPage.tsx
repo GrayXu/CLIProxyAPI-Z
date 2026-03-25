@@ -7,7 +7,7 @@ import {
   IconFileText,
   IconSatellite
 } from '@/components/ui/icons';
-import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
+import { useAuthStore, useConfigStore, useModelsStore, useSessionStore } from '@/stores';
 import { apiKeysApi, providersApi, authFilesApi } from '@/services/api';
 import styles from './DashboardPage.module.scss';
 
@@ -27,6 +27,15 @@ interface ProviderStats {
   openai: number | null;
 }
 
+const getArrayLength = (value: unknown): number | null =>
+  Array.isArray(value) ? value.length : null;
+
+const getAuthFilesLength = (value: unknown): number | null => {
+  if (!value || typeof value !== 'object') return null;
+  const files = (value as { files?: unknown }).files;
+  return Array.isArray(files) ? files.length : null;
+};
+
 export function DashboardPage() {
   const { t, i18n } = useTranslation();
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
@@ -34,6 +43,13 @@ export function DashboardPage() {
   const serverBuildDate = useAuthStore((state) => state.serverBuildDate);
   const apiBase = useAuthStore((state) => state.apiBase);
   const config = useConfigStore((state) => state.config);
+  const canViewConfig = useSessionStore((state) => state.isRouteAllowed('/config'));
+  const canViewProviders = useSessionStore((state) => state.isRouteAllowed('/ai-providers'));
+  const canViewAuthFiles = useSessionStore((state) => state.isRouteAllowed('/auth-files'));
+  const canViewSystemModels = useSessionStore((state) => state.hasCapability('system_models'));
+  const canViewDashboardSensitive = useSessionStore((state) =>
+    state.hasCapability('dashboard_sensitive')
+  );
 
   const models = useModelsStore((state) => state.models);
   const modelsLoading = useModelsStore((state) => state.loading);
@@ -88,6 +104,9 @@ export function DashboardPage() {
   };
 
   const resolveApiKeysForModels = useCallback(async () => {
+    if (!canViewSystemModels) {
+      return [];
+    }
     if (apiKeysCache.current.length) {
       return apiKeysCache.current;
     }
@@ -108,10 +127,10 @@ export function DashboardPage() {
     } catch {
       return [];
     }
-  }, [config?.apiKeys]);
+  }, [canViewSystemModels, config?.apiKeys]);
 
   const fetchModels = useCallback(async () => {
-    if (connectionStatus !== 'connected' || !apiBase) {
+    if (!canViewSystemModels || connectionStatus !== 'connected' || !apiBase) {
       return;
     }
 
@@ -122,31 +141,55 @@ export function DashboardPage() {
     } catch {
       // Ignore model fetch errors on dashboard
     }
-  }, [connectionStatus, apiBase, resolveApiKeysForModels, fetchModelsFromStore]);
+  }, [
+    apiBase,
+    canViewSystemModels,
+    connectionStatus,
+    resolveApiKeysForModels,
+    fetchModelsFromStore
+  ]);
 
   useEffect(() => {
     const fetchStats = async () => {
       setLoading(true);
       try {
         const [keysRes, filesRes, geminiRes, codexRes, claudeRes, openaiRes] = await Promise.allSettled([
-          apiKeysApi.list(),
-          authFilesApi.list(),
-          providersApi.getGeminiKeys(),
-          providersApi.getCodexConfigs(),
-          providersApi.getClaudeConfigs(),
-          providersApi.getOpenAIProviders()
+          canViewDashboardSensitive && canViewConfig ? apiKeysApi.list() : Promise.resolve(null),
+          canViewAuthFiles ? authFilesApi.list() : Promise.resolve(null),
+          canViewProviders ? providersApi.getGeminiKeys() : Promise.resolve(null),
+          canViewProviders ? providersApi.getCodexConfigs() : Promise.resolve(null),
+          canViewProviders ? providersApi.getClaudeConfigs() : Promise.resolve(null),
+          canViewProviders ? providersApi.getOpenAIProviders() : Promise.resolve(null)
         ]);
 
         setStats({
-          apiKeys: keysRes.status === 'fulfilled' ? keysRes.value.length : null,
-          authFiles: filesRes.status === 'fulfilled' ? filesRes.value.files.length : null
+          apiKeys:
+            canViewDashboardSensitive && canViewConfig && keysRes.status === 'fulfilled'
+              ? getArrayLength(keysRes.value)
+              : null,
+          authFiles:
+            canViewAuthFiles && filesRes.status === 'fulfilled'
+              ? getAuthFilesLength(filesRes.value)
+              : null
         });
 
         setProviderStats({
-          gemini: geminiRes.status === 'fulfilled' ? geminiRes.value.length : null,
-          codex: codexRes.status === 'fulfilled' ? codexRes.value.length : null,
-          claude: claudeRes.status === 'fulfilled' ? claudeRes.value.length : null,
-          openai: openaiRes.status === 'fulfilled' ? openaiRes.value.length : null
+          gemini:
+            canViewProviders && geminiRes.status === 'fulfilled'
+              ? getArrayLength(geminiRes.value)
+              : null,
+          codex:
+            canViewProviders && codexRes.status === 'fulfilled'
+              ? getArrayLength(codexRes.value)
+              : null,
+          claude:
+            canViewProviders && claudeRes.status === 'fulfilled'
+              ? getArrayLength(claudeRes.value)
+              : null,
+          openai:
+            canViewProviders && openaiRes.status === 'fulfilled'
+              ? getArrayLength(openaiRes.value)
+              : null
         });
       } finally {
         setLoading(false);
@@ -155,11 +198,21 @@ export function DashboardPage() {
 
     if (connectionStatus === 'connected') {
       fetchStats();
-      fetchModels();
+      if (canViewSystemModels) {
+        fetchModels();
+      }
     } else {
       setLoading(false);
     }
-  }, [connectionStatus, fetchModels]);
+  }, [
+    canViewAuthFiles,
+    canViewConfig,
+    canViewDashboardSensitive,
+    canViewProviders,
+    canViewSystemModels,
+    connectionStatus,
+    fetchModels
+  ]);
 
   // Calculate total provider keys only when all provider stats are available.
   const providerStatsReady =
@@ -180,45 +233,61 @@ export function DashboardPage() {
     : 0;
 
   const quickStats: QuickStat[] = [
-    {
-      label: t('dashboard.management_keys'),
-      value: stats.apiKeys ?? '-',
-      icon: <IconKey size={24} />,
-      path: '/config',
-      loading: loading && stats.apiKeys === null,
-      sublabel: t('nav.config_management')
-    },
-    {
-      label: t('nav.ai_providers'),
-      value: loading ? '-' : providerStatsReady ? totalProviderKeys : '-',
-      icon: <IconBot size={24} />,
-      path: '/ai-providers',
-      loading: loading,
-      sublabel: hasProviderStats
-        ? t('dashboard.provider_keys_detail', {
-            gemini: providerStats.gemini ?? '-',
-            codex: providerStats.codex ?? '-',
-            claude: providerStats.claude ?? '-',
-            openai: providerStats.openai ?? '-'
-          })
-        : undefined
-    },
-    {
-      label: t('nav.auth_files'),
-      value: stats.authFiles ?? '-',
-      icon: <IconFileText size={24} />,
-      path: '/auth-files',
-      loading: loading && stats.authFiles === null,
-      sublabel: t('dashboard.oauth_credentials')
-    },
-    {
-      label: t('dashboard.available_models'),
-      value: modelsLoading ? '-' : models.length,
-      icon: <IconSatellite size={24} />,
-      path: '/system',
-      loading: modelsLoading,
-      sublabel: t('dashboard.available_models_desc')
-    }
+    ...(canViewDashboardSensitive && canViewConfig
+      ? [
+          {
+            label: t('dashboard.management_keys'),
+            value: stats.apiKeys ?? '-',
+            icon: <IconKey size={24} />,
+            path: '/config',
+            loading: loading && stats.apiKeys === null,
+            sublabel: t('nav.config_management')
+          }
+        ]
+      : []),
+    ...(canViewProviders
+      ? [
+          {
+            label: t('nav.ai_providers'),
+            value: loading ? '-' : providerStatsReady ? totalProviderKeys : '-',
+            icon: <IconBot size={24} />,
+            path: '/ai-providers',
+            loading: loading,
+            sublabel: hasProviderStats
+              ? t('dashboard.provider_keys_detail', {
+                  gemini: providerStats.gemini ?? '-',
+                  codex: providerStats.codex ?? '-',
+                  claude: providerStats.claude ?? '-',
+                  openai: providerStats.openai ?? '-'
+                })
+              : undefined
+          }
+        ]
+      : []),
+    ...(canViewAuthFiles
+      ? [
+          {
+            label: t('nav.auth_files'),
+            value: stats.authFiles ?? '-',
+            icon: <IconFileText size={24} />,
+            path: '/auth-files',
+            loading: loading && stats.authFiles === null,
+            sublabel: t('dashboard.oauth_credentials')
+          }
+        ]
+      : []),
+    ...(canViewSystemModels
+      ? [
+          {
+            label: t('dashboard.available_models'),
+            value: modelsLoading ? '-' : models.length,
+            icon: <IconSatellite size={24} />,
+            path: '/system',
+            loading: modelsLoading,
+            sublabel: t('dashboard.available_models_desc')
+          }
+        ]
+      : [])
   ];
 
   const routingStrategyRaw = config?.routingStrategy?.trim() || '';
@@ -282,20 +351,22 @@ export function DashboardPage() {
         </div>
       </div>
 
-      <div className={styles.statsGrid}>
-        {quickStats.map((stat) => (
-          <Link key={stat.path} to={stat.path} className={styles.statCard}>
-            <div className={styles.statIcon}>{stat.icon}</div>
-            <div className={styles.statContent}>
-              <span className={styles.statValue}>{stat.loading ? '...' : stat.value}</span>
-              <span className={styles.statLabel}>{stat.label}</span>
-              {stat.sublabel && !stat.loading && (
-                <span className={styles.statSublabel}>{stat.sublabel}</span>
-              )}
-            </div>
-          </Link>
-        ))}
-      </div>
+      {quickStats.length > 0 && (
+        <div className={styles.statsGrid}>
+          {quickStats.map((stat) => (
+            <Link key={stat.path} to={stat.path} className={styles.statCard}>
+              <div className={styles.statIcon}>{stat.icon}</div>
+              <div className={styles.statContent}>
+                <span className={styles.statValue}>{stat.loading ? '...' : stat.value}</span>
+                <span className={styles.statLabel}>{stat.label}</span>
+                {stat.sublabel && !stat.loading && (
+                  <span className={styles.statSublabel}>{stat.sublabel}</span>
+                )}
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {config && (
         <div className={styles.section}>
@@ -342,9 +413,11 @@ export function DashboardPage() {
               </div>
             )}
           </div>
-          <Link to="/config" className={styles.viewMoreLink}>
-            {t('dashboard.edit_settings')} →
-          </Link>
+          {canViewConfig && (
+            <Link to="/config" className={styles.viewMoreLink}>
+              {t('dashboard.edit_settings')} →
+            </Link>
+          )}
         </div>
       )}
     </div>

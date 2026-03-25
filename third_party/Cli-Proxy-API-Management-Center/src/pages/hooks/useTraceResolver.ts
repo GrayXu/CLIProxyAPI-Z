@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { authFilesApi } from '@/services/api/authFiles';
-import { USAGE_STATS_STALE_TIME_MS, useUsageStatsStore } from '@/stores';
+import { USAGE_STATS_STALE_TIME_MS, useSessionStore, useUsageStatsStore } from '@/stores';
 import type { AuthFileItem, Config } from '@/types';
 import type { CredentialInfo, SourceInfo } from '@/types/sourceInfo';
 import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
@@ -91,6 +91,7 @@ export function useTraceResolver(options: UseTraceResolverOptions): UseTraceReso
   const usageSnapshot = useUsageStatsStore((state) => state.usage);
   const usageScopeKey = useUsageStatsStore((state) => state.scopeKey);
   const loadUsageStats = useUsageStatsStore((state) => state.loadUsageStats);
+  const canViewAuthFiles = useSessionStore((state) => state.isRouteAllowed('/auth-files'));
 
   const [traceLogLine, setTraceLogLine] = useState<ParsedLogLine | null>(null);
   const [traceAuthFileMap, setTraceAuthFileMap] = useState<Map<string, CredentialInfo>>(new Map());
@@ -130,7 +131,9 @@ export function useTraceResolver(options: UseTraceResolverOptions): UseTraceReso
           force: forceUsage,
           staleTimeMs: USAGE_STATS_STALE_TIME_MS
         }),
-        authFresh ? Promise.resolve(null) : authFilesApi.list().catch(() => null)
+        authFresh || !canViewAuthFiles
+          ? Promise.resolve(null)
+          : authFilesApi.list().catch(() => null)
       ]);
 
       if (authFilesResponse !== null) {
@@ -156,7 +159,7 @@ export function useTraceResolver(options: UseTraceResolverOptions): UseTraceReso
     } finally {
       setTraceLoading(false);
     }
-  }, [loadUsageStats, t, traceLoading, traceScopeKey]);
+  }, [canViewAuthFiles, loadUsageStats, t, traceLoading, traceScopeKey]);
 
   const loadTraceUsageDetails = useCallback(async () => {
     await loadTraceUsageDetailsInternal(false);

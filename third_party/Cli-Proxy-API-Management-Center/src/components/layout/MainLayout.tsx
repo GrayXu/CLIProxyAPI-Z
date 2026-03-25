@@ -7,10 +7,11 @@ import {
   useRef,
   useState,
 } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, Navigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { PageTransition } from '@/components/common/PageTransition';
+import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { MainRoutes } from '@/router/MainRoutes';
 import {
   IconSidebarAuthFiles,
@@ -29,6 +30,7 @@ import {
   useConfigStore,
   useLanguageStore,
   useNotificationStore,
+  useSessionStore,
   useThemeStore,
 } from '@/stores';
 import { triggerHeaderRefresh } from '@/hooks/useHeaderRefresh';
@@ -210,6 +212,10 @@ export function MainLayout() {
   const apiBase = useAuthStore((state) => state.apiBase);
   const connectionStatus = useAuthStore((state) => state.connectionStatus);
   const logout = useAuthStore((state) => state.logout);
+  const allowedRoutes = useSessionStore((state) => state.allowedRoutes);
+  const sessionInitialized = useSessionStore((state) => state.initialized);
+  const sessionLoading = useSessionStore((state) => state.loading);
+  const isRouteAllowed = useSessionStore((state) => state.isRouteAllowed);
 
   const config = useConfigStore((state) => state.config);
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
@@ -230,6 +236,7 @@ export function MainLayout() {
   const themeMenuRef = useRef<HTMLDivElement | null>(null);
   const brandCollapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const headerRef = useRef<HTMLElement | null>(null);
+  const deniedPathRef = useRef<string | null>(null);
 
   const fullBrandName = 'CLI Proxy API Management Center';
   const abbrBrandName = t('title.abbr');
@@ -409,6 +416,21 @@ export function MainLayout() {
     });
   }, [fetchConfig]);
 
+  const accessDenied =
+    sessionInitialized && !sessionLoading && !isRouteAllowed(location.pathname);
+
+  useEffect(() => {
+    if (!accessDenied || location.pathname === '/dashboard') {
+      deniedPathRef.current = null;
+      return;
+    }
+    if (deniedPathRef.current === location.pathname) {
+      return;
+    }
+    deniedPathRef.current = location.pathname;
+    showNotification(t('notification.page_access_denied'), 'warning');
+  }, [accessDenied, location.pathname, showNotification, t]);
+
   const statusClass =
     connectionStatus === 'connected'
       ? 'success'
@@ -430,7 +452,7 @@ export function MainLayout() {
       ? [{ path: '/logs', label: t('nav.logs'), icon: sidebarIcons.logs }]
       : []),
     { path: '/system', label: t('nav.system_info'), icon: sidebarIcons.system },
-  ];
+  ].filter((item) => isRouteAllowed(item.path));
   const navOrder = navItems.map((item) => item.path);
   const getRouteOrder = (pathname: string) => {
     const trimmedPath =
@@ -506,6 +528,20 @@ export function MainLayout() {
     }
     showNotification(t('notification.data_refreshed'), 'success');
   };
+
+  if (sessionLoading || !sessionInitialized) {
+    return (
+      <div className="app-shell">
+        <div className="main-content">
+          <LoadingSpinner />
+        </div>
+      </div>
+    );
+  }
+
+  if (accessDenied) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   return (
     <div className="app-shell">
@@ -713,7 +749,9 @@ export function MainLayout() {
         <div className={`content${isLogsPage ? ' content-logs' : ''}`} ref={contentRef}>
           <main className={`main-content${isLogsPage ? ' main-content-logs' : ''}`}>
             <PageTransition
-              render={(location) => <MainRoutes location={location} />}
+              render={(location) => (
+                <MainRoutes location={location} allowedRoutes={allowedRoutes} />
+              )}
               getRouteOrder={getRouteOrder}
               getTransitionVariant={getTransitionVariant}
               scrollContainerRef={contentRef}

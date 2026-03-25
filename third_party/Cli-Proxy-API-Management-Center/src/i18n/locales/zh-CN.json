@@ -1447,6 +1447,7 @@
     "delete_failed": "删除失败",
     "upload_failed": "上传失败",
     "download_failed": "下载失败",
+    "page_access_denied": "当前 key 无权限访问该页面，已跳转到仪表盘",
     "login_failed": "登录失败",
     "please_enter": "请输入",
     "please_fill": "请填写",

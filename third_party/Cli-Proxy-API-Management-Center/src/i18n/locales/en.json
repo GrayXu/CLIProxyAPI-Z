@@ -1447,6 +1447,7 @@
     "delete_failed": "Delete failed",
     "upload_failed": "Upload failed",
     "download_failed": "Download failed",
+    "page_access_denied": "This key cannot access that page. Redirected to the dashboard.",
     "login_failed": "Login failed",
     "please_enter": "Please enter",
     "please_fill": "Please fill",

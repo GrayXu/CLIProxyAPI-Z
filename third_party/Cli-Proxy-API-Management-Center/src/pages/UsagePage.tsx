@@ -16,7 +16,7 @@ import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import { Select } from '@/components/ui/Select';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
-import { useThemeStore, useConfigStore } from '@/stores';
+import { useThemeStore, useConfigStore, useSessionStore } from '@/stores';
 import {
   StatCards,
   UsageChart,
@@ -126,6 +126,8 @@ export function UsagePage() {
   const resolvedTheme = useThemeStore((state) => state.resolvedTheme);
   const isDark = resolvedTheme === 'dark';
   const config = useConfigStore((state) => state.config);
+  const canExportUsage = useSessionStore((state) => state.hasCapability('usage_export'));
+  const canImportUsage = useSessionStore((state) => state.hasCapability('usage_import'));
 
   // Data hook
   const {
@@ -260,24 +262,28 @@ export function UsagePage() {
               fullWidth={false}
             />
           </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleExport}
-            loading={exporting}
-            disabled={loading || importing}
-          >
-            {t('usage_stats.export')}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleImport}
-            loading={importing}
-            disabled={loading || exporting}
-          >
-            {t('usage_stats.import')}
-          </Button>
+          {canExportUsage && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleExport}
+              loading={exporting}
+              disabled={loading || importing}
+            >
+              {t('usage_stats.export')}
+            </Button>
+          )}
+          {canImportUsage && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleImport}
+              loading={importing}
+              disabled={loading || exporting}
+            >
+              {t('usage_stats.import')}
+            </Button>
+          )}
           <Button
             variant="secondary"
             size="sm"
@@ -381,6 +387,7 @@ export function UsagePage() {
       <RequestEventsDetailsCard
         usage={filteredUsage}
         loading={loading}
+        allowExport={canExportUsage}
         geminiKeys={config?.geminiApiKeys || []}
         claudeConfigs={config?.claudeApiKeys || []}
         codexConfigs={config?.codexApiKeys || []}

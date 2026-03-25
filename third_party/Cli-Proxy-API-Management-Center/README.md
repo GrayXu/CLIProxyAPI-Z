@@ -74,6 +74,7 @@ See `api.md` for the full authentication rules, server-side limits, and edge cas
 ## What you can manage (mapped to the UI pages)
 
 - **Dashboard**: connection status, server version/build date, quick counts, model availability snapshot.
+- **Viewer keys**: the UI consumes `/session` capabilities and hides routes/actions you cannot use, instead of rendering empty restricted panels.
 - **Basic Settings**: debug, proxy URL, request retry, quota fallback (switch project or preview models when limits reached), usage statistics, request logging, file logging, WebSocket auth.
 - **API Keys**: manage proxy `api-keys` (add/edit/delete).
 - **AI Providers**:
