@@ -28,6 +28,10 @@ func (h *Handler) GetConfig(c *gin.Context) {
 		c.JSON(200, gin.H{})
 		return
 	}
+	if h.roleFromContext(c) == roleViewer {
+		c.JSON(http.StatusOK, viewerConfigPayload(handlerConfigView{h: h}))
+		return
+	}
 	c.JSON(200, new(*h.cfg))
 }
 

@@ -3,7 +3,6 @@
 package management
 
 import (
-	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type attemptInfo struct {
@@ -202,7 +200,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 				h.attemptsMu.Unlock()
 			}
 		}
-		if secretHash == "" && envSecret == "" {
+		if secretHash == "" && envSecret == "" && strings.TrimSpace(h.localPassword) == "" && !h.hasViewerManagementKeys() {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "remote management key not set"})
 			return
 		}
@@ -229,16 +227,8 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 			return
 		}
 
-		if localClient {
-			if lp := h.localPassword; lp != "" {
-				if subtle.ConstantTimeCompare([]byte(provided), []byte(lp)) == 1 {
-					c.Next()
-					return
-				}
-			}
-		}
-
-		if envSecret != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(envSecret)) == 1 {
+		currentRole := h.resolveRoleForKey(provided, secretHash, envSecret, localClient)
+		if currentRole == roleAdmin {
 			if !localClient {
 				h.attemptsMu.Lock()
 				if ai := h.failedAttempts[clientIP]; ai != nil {
@@ -247,28 +237,32 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 				}
 				h.attemptsMu.Unlock()
 			}
+			h.setRoleContext(c, roleAdmin)
 			c.Next()
 			return
 		}
 
-		if secretHash == "" || bcrypt.CompareHashAndPassword([]byte(secretHash), []byte(provided)) != nil {
+		if currentRole == roleViewer {
+			if !localClient {
+				h.attemptsMu.Lock()
+				if ai := h.failedAttempts[clientIP]; ai != nil {
+					ai.count = 0
+					ai.blockedUntil = time.Time{}
+				}
+				h.attemptsMu.Unlock()
+			}
+			h.setRoleContext(c, roleViewer)
+			c.Next()
+			return
+		}
+
+		if currentRole == "" {
 			if !localClient {
 				fail()
 			}
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid management key"})
 			return
 		}
-
-		if !localClient {
-			h.attemptsMu.Lock()
-			if ai := h.failedAttempts[clientIP]; ai != nil {
-				ai.count = 0
-				ai.blockedUntil = time.Time{}
-			}
-			h.attemptsMu.Unlock()
-		}
-
-		c.Next()
 	}
 }
 

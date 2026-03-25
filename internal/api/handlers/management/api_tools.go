@@ -55,6 +55,14 @@ type apiCallResponse struct {
 	Body       string              `json:"body"`
 }
 
+type managedRequestSpec struct {
+	AuthIndex string
+	Method    string
+	URL       string
+	Header    map[string]string
+	Data      string
+}
+
 // APICall makes a generic HTTP request on behalf of the management API caller.
 // It is protected by the management middleware.
 //
@@ -129,90 +137,30 @@ func (h *Handler) APICall(c *gin.Context) {
 		return
 	}
 
-	authIndex := firstNonEmptyString(body.AuthIndexSnake, body.AuthIndexCamel, body.AuthIndexPascal)
-	auth := h.authByIndex(authIndex)
-
-	reqHeaders := body.Header
-	if reqHeaders == nil {
-		reqHeaders = map[string]string{}
-	}
-
-	var hostOverride string
-	var token string
-	var tokenResolved bool
-	var tokenErr error
-	for key, value := range reqHeaders {
-		if !strings.Contains(value, "$TOKEN$") {
-			continue
-		}
-		if !tokenResolved {
-			token, tokenErr = h.resolveTokenForAuth(c.Request.Context(), auth)
-			tokenResolved = true
-		}
-		if auth != nil && token == "" {
-			if tokenErr != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "auth token refresh failed"})
-				return
-			}
-			c.JSON(http.StatusBadRequest, gin.H{"error": "auth token not found"})
-			return
-		}
-		if token == "" {
-			continue
-		}
-		reqHeaders[key] = strings.ReplaceAll(value, "$TOKEN$", token)
-	}
-
-	var requestBody io.Reader
-	if body.Data != "" {
-		requestBody = strings.NewReader(body.Data)
-	}
-
-	req, errNewRequest := http.NewRequestWithContext(c.Request.Context(), method, urlStr, requestBody)
-	if errNewRequest != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to build request"})
-		return
-	}
-
-	for key, value := range reqHeaders {
-		if strings.EqualFold(key, "host") {
-			hostOverride = strings.TrimSpace(value)
-			continue
-		}
-		req.Header.Set(key, value)
-	}
-	if hostOverride != "" {
-		req.Host = hostOverride
-	}
-
-	httpClient := &http.Client{
-		Timeout: defaultAPICallTimeout,
-	}
-	httpClient.Transport = h.apiCallTransport(auth)
-
-	resp, errDo := httpClient.Do(req)
-	if errDo != nil {
-		log.WithError(errDo).Debug("management APICall request failed")
-		c.JSON(http.StatusBadGateway, gin.H{"error": "request failed"})
-		return
-	}
-	defer func() {
-		if errClose := resp.Body.Close(); errClose != nil {
-			log.Errorf("response body close error: %v", errClose)
-		}
-	}()
-
-	respBody, errReadAll := io.ReadAll(resp.Body)
-	if errReadAll != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to read response"})
-		return
-	}
-
-	c.JSON(http.StatusOK, apiCallResponse{
-		StatusCode: resp.StatusCode,
-		Header:     resp.Header,
-		Body:       string(respBody),
+	resp, errExec := h.executeManagedRequest(c.Request.Context(), managedRequestSpec{
+		AuthIndex: firstNonEmptyString(body.AuthIndexSnake, body.AuthIndexCamel, body.AuthIndexPascal),
+		Method:    method,
+		URL:       urlStr,
+		Header:    body.Header,
+		Data:      body.Data,
 	})
+	if errExec != nil {
+		switch {
+		case strings.Contains(errExec.Error(), "auth token refresh failed"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "auth token refresh failed"})
+		case strings.Contains(errExec.Error(), "auth token not found"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "auth token not found"})
+		case strings.Contains(errExec.Error(), "failed to build request"):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to build request"})
+		case strings.Contains(errExec.Error(), "failed to read response"):
+			c.JSON(http.StatusBadGateway, gin.H{"error": "failed to read response"})
+		default:
+			c.JSON(http.StatusBadGateway, gin.H{"error": "request failed"})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
 
 func firstNonEmptyString(values ...*string) string {
@@ -665,4 +613,84 @@ func buildProxyTransport(proxyStr string) *http.Transport {
 		return nil
 	}
 	return transport
+}
+
+func (h *Handler) executeManagedRequest(ctx context.Context, spec managedRequestSpec) (apiCallResponse, error) {
+	auth := h.authByIndex(spec.AuthIndex)
+	reqHeaders := make(map[string]string, len(spec.Header))
+	for key, value := range spec.Header {
+		reqHeaders[key] = value
+	}
+
+	var token string
+	var tokenResolved bool
+	var tokenErr error
+	for key, value := range reqHeaders {
+		if !strings.Contains(value, "$TOKEN$") {
+			continue
+		}
+		if !tokenResolved {
+			token, tokenErr = h.resolveTokenForAuth(ctx, auth)
+			tokenResolved = true
+		}
+		if auth != nil && token == "" {
+			if tokenErr != nil {
+				return apiCallResponse{}, fmt.Errorf("auth token refresh failed: %w", tokenErr)
+			}
+			return apiCallResponse{}, fmt.Errorf("auth token not found")
+		}
+		if token == "" {
+			continue
+		}
+		reqHeaders[key] = strings.ReplaceAll(value, "$TOKEN$", token)
+	}
+
+	var requestBody io.Reader
+	if spec.Data != "" {
+		requestBody = strings.NewReader(spec.Data)
+	}
+
+	req, errNewRequest := http.NewRequestWithContext(ctx, spec.Method, spec.URL, requestBody)
+	if errNewRequest != nil {
+		return apiCallResponse{}, fmt.Errorf("failed to build request: %w", errNewRequest)
+	}
+
+	var hostOverride string
+	for key, value := range reqHeaders {
+		if strings.EqualFold(key, "host") {
+			hostOverride = strings.TrimSpace(value)
+			continue
+		}
+		req.Header.Set(key, value)
+	}
+	if hostOverride != "" {
+		req.Host = hostOverride
+	}
+
+	httpClient := &http.Client{
+		Timeout: defaultAPICallTimeout,
+	}
+	httpClient.Transport = h.apiCallTransport(auth)
+
+	resp, errDo := httpClient.Do(req)
+	if errDo != nil {
+		log.WithError(errDo).Debug("management request failed")
+		return apiCallResponse{}, errDo
+	}
+	defer func() {
+		if errClose := resp.Body.Close(); errClose != nil {
+			log.Errorf("response body close error: %v", errClose)
+		}
+	}()
+
+	respBody, errReadAll := io.ReadAll(resp.Body)
+	if errReadAll != nil {
+		return apiCallResponse{}, fmt.Errorf("failed to read response: %w", errReadAll)
+	}
+
+	return apiCallResponse{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header,
+		Body:       string(respBody),
+	}, nil
 }
