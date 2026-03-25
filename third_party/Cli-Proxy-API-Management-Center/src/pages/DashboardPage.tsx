@@ -228,6 +228,8 @@ export function DashboardPage() {
       ? t('basic_settings.routing_strategy_round_robin')
       : routingStrategyRaw === 'fill-first'
         ? t('basic_settings.routing_strategy_fill_first')
+        : routingStrategyRaw === 'quota-sticky'
+          ? t('basic_settings.routing_strategy_quota_sticky')
         : routingStrategyRaw;
   const routingStrategyBadgeClass = !routingStrategyRaw
     ? styles.configBadgeUnknown

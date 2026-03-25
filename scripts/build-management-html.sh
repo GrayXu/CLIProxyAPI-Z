@@ -13,7 +13,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/build-management-html.sh [--deploy-static]
 
-Build the management WebUI from the local submodule checkout and refresh:
+Build the management WebUI from the local vendored subtree checkout and refresh:
   internal/managementasset/bundled/management.html
 
 Options:
@@ -44,7 +44,7 @@ if [[ ! -d "${WEBUI_DIR}" ]]; then
 fi
 
 if [[ ! -f "${WEBUI_DIR}/package.json" ]]; then
-  echo "webui submodule is not initialized: ${WEBUI_DIR}" >&2
+  echo "webui subtree directory is incomplete: ${WEBUI_DIR}" >&2
   exit 1
 fi
 

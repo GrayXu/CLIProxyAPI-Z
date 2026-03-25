@@ -12,6 +12,8 @@ import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver
 import {
   collectUsageDetails,
   extractTotalTokens,
+  getFastModeStatus,
+  type FastModeStatus,
   normalizeAuthIndex
 } from '@/utils/usage';
 import { downloadBlob } from '@/utils/download';
@@ -30,6 +32,9 @@ type RequestEventRow = {
   source: string;
   sourceType: string;
   authIndex: string;
+  serviceTier: string;
+  requestedFastMode: boolean;
+  fastModeStatus: FastModeStatus;
   failed: boolean;
   inputTokens: number;
   outputTokens: number;
@@ -131,6 +136,8 @@ export function RequestEventsDetailsCard({
           authIndexRaw === null || authIndexRaw === undefined || authIndexRaw === ''
             ? '-'
             : String(authIndexRaw);
+        const serviceTier = detail.service_tier || '';
+        const requestedFastMode = detail.requested_fast_mode === true;
         const sourceInfo = resolveSourceDisplay(sourceRaw, authIndexRaw, sourceInfoMap, authFileMap);
         const source = sourceInfo.displayName;
         const sourceType = sourceInfo.type;
@@ -157,6 +164,9 @@ export function RequestEventsDetailsCard({
           source,
           sourceType,
           authIndex,
+          serviceTier,
+          requestedFastMode,
+          fastModeStatus: getFastModeStatus(requestedFastMode, serviceTier),
           failed: detail.failed === true,
           inputTokens,
           outputTokens,
@@ -257,6 +267,9 @@ export function RequestEventsDetailsCard({
       'source',
       'source_raw',
       'auth_index',
+      'service_tier',
+      'requested_fast_mode',
+      'fast_mode_status',
       'result',
       'input_tokens',
       'output_tokens',
@@ -272,6 +285,9 @@ export function RequestEventsDetailsCard({
         row.source,
         row.sourceRaw,
         row.authIndex,
+        row.serviceTier,
+        row.requestedFastMode ? 'true' : 'false',
+        row.fastModeStatus,
         row.failed ? 'failed' : 'success',
         row.inputTokens,
         row.outputTokens,
@@ -300,6 +316,9 @@ export function RequestEventsDetailsCard({
       source: row.source,
       source_raw: row.sourceRaw,
       auth_index: row.authIndex,
+      service_tier: row.serviceTier,
+      requested_fast_mode: row.requestedFastMode,
+      fast_mode_status: row.fastModeStatus,
       failed: row.failed,
       tokens: {
         input_tokens: row.inputTokens,
@@ -427,6 +446,7 @@ export function RequestEventsDetailsCard({
                   <th>{t('usage_stats.request_events_source')}</th>
                   <th>{t('usage_stats.request_events_auth_index')}</th>
                   <th>{t('usage_stats.request_events_result')}</th>
+                  <th>{t('usage_stats.request_events_fast_mode')}</th>
                   <th>{t('usage_stats.input_tokens')}</th>
                   <th>{t('usage_stats.output_tokens')}</th>
                   <th>{t('usage_stats.reasoning_tokens')}</th>
@@ -455,6 +475,24 @@ export function RequestEventsDetailsCard({
                         className={row.failed ? styles.requestEventsResultFailed : styles.requestEventsResultSuccess}
                       >
                         {row.failed ? t('stats.failure') : t('stats.success')}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className={
+                          row.fastModeStatus === 'yes'
+                            ? styles.requestEventsResultSuccess
+                            : row.fastModeStatus === 'fail'
+                              ? styles.requestEventsResultFailed
+                              : styles.requestEventsResultNeutral
+                        }
+                        title={row.serviceTier || undefined}
+                      >
+                        {row.fastModeStatus === 'yes'
+                          ? t('usage_stats.request_events_fast_mode_yes')
+                          : row.fastModeStatus === 'fail'
+                            ? t('usage_stats.request_events_fast_mode_fail')
+                            : t('usage_stats.request_events_fast_mode_no')}
                       </span>
                     </td>
                     <td>{row.inputTokens.toLocaleString()}</td>

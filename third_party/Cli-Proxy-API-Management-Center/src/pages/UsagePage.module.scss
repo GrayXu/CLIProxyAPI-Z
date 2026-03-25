@@ -609,6 +609,12 @@
   border: 1px solid var(--border-color);
 }
 
+.advancedPriceFields {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
 .formRow {
   display: flex;
   gap: 10px;
@@ -940,8 +946,15 @@
   border: 1px solid var(--failure-badge-border);
 }
 
+.requestEventsResultNeutral {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
 .requestEventsResultSuccess,
-.requestEventsResultFailed {
+.requestEventsResultFailed,
+.requestEventsResultNeutral {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;

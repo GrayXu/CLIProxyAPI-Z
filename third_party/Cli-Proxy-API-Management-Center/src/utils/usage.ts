@@ -29,16 +29,26 @@ export interface RateStats {
   tokenCount: number;
 }
 
+export interface ModelPriceOverrides {
+  prompt?: number;
+  completion?: number;
+  cache?: number;
+}
+
 export interface ModelPrice {
   prompt: number;
   completion: number;
   cache: number;
+  fast_mode_multiplier?: number;
+  input_over_272k?: ModelPriceOverrides;
 }
 
 export interface UsageDetail {
   timestamp: string;
   source: string;
   auth_index: number;
+  service_tier: string;
+  requested_fast_mode: boolean;
   tokens: {
     input_tokens: number;
     output_tokens: number;
@@ -69,15 +79,18 @@ export interface ApiStats {
   models: Record<string, { requests: number; successCount: number; failureCount: number; tokens: number }>;
 }
 
-export type UsageTimeRange = '7h' | '24h' | '7d' | 'all';
+export type UsageTimeRange = '7h' | '24h' | '7d' | '30d' | 'all';
+export type FastModeStatus = 'yes' | 'no' | 'fail';
 
 const TOKENS_PER_PRICE_UNIT = 1_000_000;
+const LONG_INPUT_PRICE_THRESHOLD = 272_000;
 const MODEL_PRICE_STORAGE_KEY = 'cli-proxy-model-prices-v2';
 const USAGE_ENDPOINT_METHOD_REGEX = /^(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)/i;
 const USAGE_TIME_RANGE_MS: Record<Exclude<UsageTimeRange, 'all'>, number> = {
   '7h': 7 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
-  '7d': 7 * 24 * 60 * 60 * 1000
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -109,6 +122,22 @@ const toUsageSummaryFields = (summary: UsageSummary) => ({
   failure_count: summary.failureCount,
   total_tokens: summary.totalTokens
 });
+
+const parseNonNegativeNumber = (value: unknown): number | undefined => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+};
+
+export const normalizeServiceTier = (value: unknown): string =>
+  typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+export function getFastModeStatus(
+  requestedFastMode: boolean,
+  serviceTier: string
+): FastModeStatus {
+  if (!requestedFastMode) return 'no';
+  return normalizeServiceTier(serviceTier) === 'priority' ? 'yes' : 'fail';
+}
 
 export function filterUsageByTimeRange<T>(usageData: T, range: UsageTimeRange, nowMs: number = Date.now()): T {
   if (range === 'all') {
@@ -495,6 +524,8 @@ export function collectUsageDetails(usageData: unknown): UsageDetail[] {
           timestamp,
           source: normalizeSource(detailRaw.source),
           auth_index: detailRaw.auth_index as unknown as number,
+          service_tier: normalizeServiceTier(detailRaw.service_tier),
+          requested_fast_mode: detailRaw.requested_fast_mode === true,
           tokens: tokensRaw as unknown as UsageDetail['tokens'],
           failed: detailRaw.failed === true,
           __modelName: modelName,
@@ -566,6 +597,8 @@ export function collectUsageDetailsWithEndpoint(usageData: unknown): UsageDetail
           timestamp,
           source: normalizeSource(detailRaw.source),
           auth_index: detailRaw.auth_index as unknown as number,
+          service_tier: normalizeServiceTier(detailRaw.service_tier),
+          requested_fast_mode: detailRaw.requested_fast_mode === true,
           tokens: tokensRaw as unknown as UsageDetail['tokens'],
           failed: detailRaw.failed === true,
           __modelName: modelName,
@@ -713,11 +746,30 @@ export function calculateCost(detail: UsageDetail, modelPrices: Record<string, M
     Number.isFinite(rawCachedTokensAlternate) ? Math.max(rawCachedTokensAlternate, 0) : 0
   );
   const promptTokens = Math.max(inputTokens - cachedTokens, 0);
+  const useLongInputPricing = inputTokens > LONG_INPUT_PRICE_THRESHOLD;
+  const overrides = price.input_over_272k;
+  const promptPrice =
+    useLongInputPricing && overrides
+      ? parseNonNegativeNumber(overrides.prompt) ?? price.prompt
+      : price.prompt;
+  const completionPrice =
+    useLongInputPricing && overrides
+      ? parseNonNegativeNumber(overrides.completion) ?? price.completion
+      : price.completion;
+  const cachePrice =
+    useLongInputPricing && overrides
+      ? parseNonNegativeNumber(overrides.cache) ?? price.cache
+      : price.cache;
+  const multiplier =
+    getFastModeStatus(detail.requested_fast_mode, detail.service_tier) === 'yes'
+      ? parseNonNegativeNumber(price.fast_mode_multiplier) ?? 1
+      : 1;
 
-  const promptCost = (promptTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.prompt) || 0);
-  const cachedCost = (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.cache) || 0);
-  const completionCost = (completionTokens / TOKENS_PER_PRICE_UNIT) * (Number(price.completion) || 0);
-  const total = promptCost + cachedCost + completionCost;
+  const promptCost = (promptTokens / TOKENS_PER_PRICE_UNIT) * (Number(promptPrice) || 0);
+  const cachedCost = (cachedTokens / TOKENS_PER_PRICE_UNIT) * (Number(cachePrice) || 0);
+  const completionCost =
+    (completionTokens / TOKENS_PER_PRICE_UNIT) * (Number(completionPrice) || 0);
+  const total = (promptCost + cachedCost + completionCost) * multiplier;
   return Number.isFinite(total) && total > 0 ? total : 0;
 }
 
@@ -752,27 +804,50 @@ export function loadModelPrices(): Record<string, ModelPrice> {
     Object.entries(parsed).forEach(([model, price]: [string, unknown]) => {
       if (!model) return;
       const priceRecord = isRecord(price) ? price : null;
-      const promptRaw = Number(priceRecord?.prompt);
-      const completionRaw = Number(priceRecord?.completion);
-      const cacheRaw = Number(priceRecord?.cache);
+      const promptRaw = parseNonNegativeNumber(priceRecord?.prompt);
+      const completionRaw = parseNonNegativeNumber(priceRecord?.completion);
+      const cacheRaw = parseNonNegativeNumber(priceRecord?.cache);
+      const fastModeMultiplier = parseNonNegativeNumber(priceRecord?.fast_mode_multiplier);
+      const longInputRaw = isRecord(priceRecord?.input_over_272k)
+        ? priceRecord.input_over_272k
+        : null;
 
-      if (!Number.isFinite(promptRaw) && !Number.isFinite(completionRaw) && !Number.isFinite(cacheRaw)) {
+      if (
+        promptRaw === undefined &&
+        completionRaw === undefined &&
+        cacheRaw === undefined &&
+        fastModeMultiplier === undefined &&
+        !longInputRaw
+      ) {
         return;
       }
 
-      const prompt = Number.isFinite(promptRaw) && promptRaw >= 0 ? promptRaw : 0;
-      const completion = Number.isFinite(completionRaw) && completionRaw >= 0 ? completionRaw : 0;
+      const prompt = promptRaw ?? 0;
+      const completion = completionRaw ?? 0;
       const cache =
-        Number.isFinite(cacheRaw) && cacheRaw >= 0
+        cacheRaw !== undefined
           ? cacheRaw
-          : Number.isFinite(promptRaw) && promptRaw >= 0
+          : promptRaw !== undefined
             ? promptRaw
             : prompt;
+      const inputOver272k: ModelPriceOverrides = {};
+
+      if (longInputRaw) {
+        const overridePrompt = parseNonNegativeNumber(longInputRaw.prompt);
+        const overrideCompletion = parseNonNegativeNumber(longInputRaw.completion);
+        const overrideCache = parseNonNegativeNumber(longInputRaw.cache);
+
+        if (overridePrompt !== undefined) inputOver272k.prompt = overridePrompt;
+        if (overrideCompletion !== undefined) inputOver272k.completion = overrideCompletion;
+        if (overrideCache !== undefined) inputOver272k.cache = overrideCache;
+      }
 
       normalized[model] = {
         prompt,
         completion,
-        cache
+        cache,
+        ...(fastModeMultiplier !== undefined ? { fast_mode_multiplier: fastModeMultiplier } : {}),
+        ...(Object.keys(inputOver272k).length > 0 ? { input_over_272k: inputOver272k } : {})
       };
     });
     return normalized;

@@ -804,6 +804,10 @@ export function VisualConfigEditor({
                         value: 'fill-first',
                         label: t('config_management.visual.sections.network.strategy_fill_first'),
                       },
+                      {
+                        value: 'quota-sticky',
+                        label: t('config_management.visual.sections.network.strategy_quota_sticky'),
+                      },
                     ]}
                     id={`${routingStrategyLabelId}-select`}
                     disabled={disabled}

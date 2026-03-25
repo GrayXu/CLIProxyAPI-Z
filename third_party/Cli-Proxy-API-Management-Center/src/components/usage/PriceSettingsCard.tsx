@@ -14,6 +14,88 @@ export interface PriceSettingsCardProps {
   onPricesChange: (prices: Record<string, ModelPrice>) => void;
 }
 
+type PriceFormValues = {
+  prompt: string;
+  completion: string;
+  cache: string;
+  fastModeMultiplier: string;
+  inputOver272kPrompt: string;
+  inputOver272kCompletion: string;
+  inputOver272kCache: string;
+};
+
+const EMPTY_PRICE_FORM: PriceFormValues = {
+  prompt: '',
+  completion: '',
+  cache: '',
+  fastModeMultiplier: '',
+  inputOver272kPrompt: '',
+  inputOver272kCompletion: '',
+  inputOver272kCache: ''
+};
+
+const parseNonNegativeNumber = (value: string): number | undefined => {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+};
+
+const priceToFormValues = (price?: ModelPrice): PriceFormValues => ({
+  prompt: price?.prompt?.toString() || '',
+  completion: price?.completion?.toString() || '',
+  cache: price?.cache?.toString() || '',
+  fastModeMultiplier: price?.fast_mode_multiplier?.toString() || '',
+  inputOver272kPrompt: price?.input_over_272k?.prompt?.toString() || '',
+  inputOver272kCompletion: price?.input_over_272k?.completion?.toString() || '',
+  inputOver272kCache: price?.input_over_272k?.cache?.toString() || ''
+});
+
+const hasAdvancedPriceValues = (price?: ModelPrice | PriceFormValues | null) => {
+  if (!price) return false;
+  if ('fastModeMultiplier' in price) {
+    return Boolean(
+      price.fastModeMultiplier.trim() ||
+        price.inputOver272kPrompt.trim() ||
+        price.inputOver272kCompletion.trim() ||
+        price.inputOver272kCache.trim()
+    );
+  }
+
+  return Boolean(
+    price.fast_mode_multiplier !== undefined ||
+      price.input_over_272k?.prompt !== undefined ||
+      price.input_over_272k?.completion !== undefined ||
+      price.input_over_272k?.cache !== undefined
+  );
+};
+
+const buildModelPrice = (fields: PriceFormValues): ModelPrice => {
+  const prompt = parseNonNegativeNumber(fields.prompt) ?? 0;
+  const completion = parseNonNegativeNumber(fields.completion) ?? 0;
+  const cache = parseNonNegativeNumber(fields.cache) ?? prompt;
+  const fastModeMultiplier = parseNonNegativeNumber(fields.fastModeMultiplier);
+  const inputOver272k = {
+    prompt: parseNonNegativeNumber(fields.inputOver272kPrompt),
+    completion: parseNonNegativeNumber(fields.inputOver272kCompletion),
+    cache: parseNonNegativeNumber(fields.inputOver272kCache)
+  };
+
+  return {
+    prompt,
+    completion,
+    cache,
+    ...(fastModeMultiplier !== undefined ? { fast_mode_multiplier: fastModeMultiplier } : {}),
+    ...(Object.values(inputOver272k).some((value) => value !== undefined)
+      ? {
+          input_over_272k: Object.fromEntries(
+            Object.entries(inputOver272k).filter(([, value]) => value !== undefined)
+          )
+        }
+      : {})
+  };
+};
+
 export function PriceSettingsCard({
   modelNames,
   modelPrices,
@@ -23,27 +105,26 @@ export function PriceSettingsCard({
 
   // Add form state
   const [selectedModel, setSelectedModel] = useState('');
-  const [promptPrice, setPromptPrice] = useState('');
-  const [completionPrice, setCompletionPrice] = useState('');
-  const [cachePrice, setCachePrice] = useState('');
+  const [priceForm, setPriceForm] = useState<PriceFormValues>(EMPTY_PRICE_FORM);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Edit modal state
   const [editModel, setEditModel] = useState<string | null>(null);
-  const [editPrompt, setEditPrompt] = useState('');
-  const [editCompletion, setEditCompletion] = useState('');
-  const [editCache, setEditCache] = useState('');
+  const [editForm, setEditForm] = useState<PriceFormValues>(EMPTY_PRICE_FORM);
+  const [editShowAdvanced, setEditShowAdvanced] = useState(false);
+
+  const updatePriceForm = (patch: Partial<PriceFormValues>) =>
+    setPriceForm((prev) => ({ ...prev, ...patch }));
+  const updateEditForm = (patch: Partial<PriceFormValues>) =>
+    setEditForm((prev) => ({ ...prev, ...patch }));
 
   const handleSavePrice = () => {
     if (!selectedModel) return;
-    const prompt = parseFloat(promptPrice) || 0;
-    const completion = parseFloat(completionPrice) || 0;
-    const cache = cachePrice.trim() === '' ? prompt : parseFloat(cachePrice) || 0;
-    const newPrices = { ...modelPrices, [selectedModel]: { prompt, completion, cache } };
+    const newPrices = { ...modelPrices, [selectedModel]: buildModelPrice(priceForm) };
     onPricesChange(newPrices);
     setSelectedModel('');
-    setPromptPrice('');
-    setCompletionPrice('');
-    setCachePrice('');
+    setPriceForm(EMPTY_PRICE_FORM);
+    setShowAdvanced(false);
   };
 
   const handleDeletePrice = (model: string) => {
@@ -55,33 +136,26 @@ export function PriceSettingsCard({
   const handleOpenEdit = (model: string) => {
     const price = modelPrices[model];
     setEditModel(model);
-    setEditPrompt(price?.prompt?.toString() || '');
-    setEditCompletion(price?.completion?.toString() || '');
-    setEditCache(price?.cache?.toString() || '');
+    const nextForm = priceToFormValues(price);
+    setEditForm(nextForm);
+    setEditShowAdvanced(hasAdvancedPriceValues(nextForm));
   };
 
   const handleSaveEdit = () => {
     if (!editModel) return;
-    const prompt = parseFloat(editPrompt) || 0;
-    const completion = parseFloat(editCompletion) || 0;
-    const cache = editCache.trim() === '' ? prompt : parseFloat(editCache) || 0;
-    const newPrices = { ...modelPrices, [editModel]: { prompt, completion, cache } };
+    const newPrices = { ...modelPrices, [editModel]: buildModelPrice(editForm) };
     onPricesChange(newPrices);
     setEditModel(null);
+    setEditForm(EMPTY_PRICE_FORM);
+    setEditShowAdvanced(false);
   };
 
   const handleModelSelect = (value: string) => {
     setSelectedModel(value);
     const price = modelPrices[value];
-    if (price) {
-      setPromptPrice(price.prompt.toString());
-      setCompletionPrice(price.completion.toString());
-      setCachePrice(price.cache.toString());
-    } else {
-      setPromptPrice('');
-      setCompletionPrice('');
-      setCachePrice('');
-    }
+    const nextForm = priceToFormValues(price);
+    setPriceForm(nextForm);
+    setShowAdvanced(hasAdvancedPriceValues(nextForm));
   };
 
   const options = useMemo(
@@ -111,8 +185,8 @@ export function PriceSettingsCard({
               <label>{t('usage_stats.model_price_prompt')} ($/1M)</label>
               <Input
                 type="number"
-                value={promptPrice}
-                onChange={(e) => setPromptPrice(e.target.value)}
+                value={priceForm.prompt}
+                onChange={(e) => updatePriceForm({ prompt: e.target.value })}
                 placeholder="0.00"
                 step="0.0001"
               />
@@ -121,8 +195,8 @@ export function PriceSettingsCard({
               <label>{t('usage_stats.model_price_completion')} ($/1M)</label>
               <Input
                 type="number"
-                value={completionPrice}
-                onChange={(e) => setCompletionPrice(e.target.value)}
+                value={priceForm.completion}
+                onChange={(e) => updatePriceForm({ completion: e.target.value })}
                 placeholder="0.00"
                 step="0.0001"
               />
@@ -131,16 +205,68 @@ export function PriceSettingsCard({
               <label>{t('usage_stats.model_price_cache')} ($/1M)</label>
               <Input
                 type="number"
-                value={cachePrice}
-                onChange={(e) => setCachePrice(e.target.value)}
-                placeholder="0.00"
+                value={priceForm.cache}
+                onChange={(e) => updatePriceForm({ cache: e.target.value })}
+                placeholder={t('usage_stats.model_price_inherit_placeholder')}
                 step="0.0001"
               />
             </div>
+            <Button variant="ghost" onClick={() => setShowAdvanced((prev) => !prev)}>
+              {showAdvanced
+                ? t('usage_stats.model_price_hide_advanced')
+                : t('usage_stats.model_price_show_advanced')}
+            </Button>
             <Button variant="primary" onClick={handleSavePrice} disabled={!selectedModel}>
-              {t('common.save')}
+              {t('usage_stats.model_price_save')}
             </Button>
           </div>
+          {showAdvanced && (
+            <div className={styles.advancedPriceFields}>
+              <div className={styles.formRow}>
+                <div className={styles.formField}>
+                  <label>{t('usage_stats.model_price_fast_mode_multiplier')}</label>
+                  <Input
+                    type="number"
+                    value={priceForm.fastModeMultiplier}
+                    onChange={(e) => updatePriceForm({ fastModeMultiplier: e.target.value })}
+                    placeholder="1.00"
+                    step="0.01"
+                    hint={t('usage_stats.model_price_fast_mode_hint')}
+                  />
+                </div>
+                <div className={styles.formField}>
+                  <label>{t('usage_stats.model_price_input_over_272k_prompt')} ($/1M)</label>
+                  <Input
+                    type="number"
+                    value={priceForm.inputOver272kPrompt}
+                    onChange={(e) => updatePriceForm({ inputOver272kPrompt: e.target.value })}
+                    placeholder={t('usage_stats.model_price_inherit_placeholder')}
+                    step="0.0001"
+                  />
+                </div>
+                <div className={styles.formField}>
+                  <label>{t('usage_stats.model_price_input_over_272k_completion')} ($/1M)</label>
+                  <Input
+                    type="number"
+                    value={priceForm.inputOver272kCompletion}
+                    onChange={(e) => updatePriceForm({ inputOver272kCompletion: e.target.value })}
+                    placeholder={t('usage_stats.model_price_inherit_placeholder')}
+                    step="0.0001"
+                  />
+                </div>
+                <div className={styles.formField}>
+                  <label>{t('usage_stats.model_price_input_over_272k_cache')} ($/1M)</label>
+                  <Input
+                    type="number"
+                    value={priceForm.inputOver272kCache}
+                    onChange={(e) => updatePriceForm({ inputOver272kCache: e.target.value })}
+                    placeholder={t('usage_stats.model_price_inherit_placeholder')}
+                    step="0.0001"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Saved Prices List */}
@@ -162,6 +288,15 @@ export function PriceSettingsCard({
                       <span>
                         {t('usage_stats.model_price_cache')}: ${price.cache.toFixed(4)}/1M
                       </span>
+                      {price.fast_mode_multiplier !== undefined && (
+                        <span>
+                          {t('usage_stats.model_price_fast_mode_summary')}: x
+                          {price.fast_mode_multiplier.toFixed(2)}
+                        </span>
+                      )}
+                      {price.input_over_272k && (
+                        <span>{t('usage_stats.model_price_input_over_272k_summary')}</span>
+                      )}
                     </div>
                   </div>
                   <div className={styles.priceActions}>
@@ -192,7 +327,7 @@ export function PriceSettingsCard({
               {t('common.cancel')}
             </Button>
             <Button variant="primary" onClick={handleSaveEdit}>
-              {t('common.save')}
+              {t('usage_stats.model_price_save')}
             </Button>
           </div>
         }
@@ -203,8 +338,8 @@ export function PriceSettingsCard({
             <label>{t('usage_stats.model_price_prompt')} ($/1M)</label>
             <Input
               type="number"
-              value={editPrompt}
-              onChange={(e) => setEditPrompt(e.target.value)}
+              value={editForm.prompt}
+              onChange={(e) => updateEditForm({ prompt: e.target.value })}
               placeholder="0.00"
               step="0.0001"
             />
@@ -213,8 +348,8 @@ export function PriceSettingsCard({
             <label>{t('usage_stats.model_price_completion')} ($/1M)</label>
             <Input
               type="number"
-              value={editCompletion}
-              onChange={(e) => setEditCompletion(e.target.value)}
+              value={editForm.completion}
+              onChange={(e) => updateEditForm({ completion: e.target.value })}
               placeholder="0.00"
               step="0.0001"
             />
@@ -223,12 +358,62 @@ export function PriceSettingsCard({
             <label>{t('usage_stats.model_price_cache')} ($/1M)</label>
             <Input
               type="number"
-              value={editCache}
-              onChange={(e) => setEditCache(e.target.value)}
-              placeholder="0.00"
+              value={editForm.cache}
+              onChange={(e) => updateEditForm({ cache: e.target.value })}
+              placeholder={t('usage_stats.model_price_inherit_placeholder')}
               step="0.0001"
             />
           </div>
+          <Button variant="ghost" onClick={() => setEditShowAdvanced((prev) => !prev)}>
+            {editShowAdvanced
+              ? t('usage_stats.model_price_hide_advanced')
+              : t('usage_stats.model_price_show_advanced')}
+          </Button>
+          {editShowAdvanced && (
+            <>
+              <div className={styles.formField}>
+                <label>{t('usage_stats.model_price_fast_mode_multiplier')}</label>
+                <Input
+                  type="number"
+                  value={editForm.fastModeMultiplier}
+                  onChange={(e) => updateEditForm({ fastModeMultiplier: e.target.value })}
+                  placeholder="1.00"
+                  step="0.01"
+                  hint={t('usage_stats.model_price_fast_mode_hint')}
+                />
+              </div>
+              <div className={styles.formField}>
+                <label>{t('usage_stats.model_price_input_over_272k_prompt')} ($/1M)</label>
+                <Input
+                  type="number"
+                  value={editForm.inputOver272kPrompt}
+                  onChange={(e) => updateEditForm({ inputOver272kPrompt: e.target.value })}
+                  placeholder={t('usage_stats.model_price_inherit_placeholder')}
+                  step="0.0001"
+                />
+              </div>
+              <div className={styles.formField}>
+                <label>{t('usage_stats.model_price_input_over_272k_completion')} ($/1M)</label>
+                <Input
+                  type="number"
+                  value={editForm.inputOver272kCompletion}
+                  onChange={(e) => updateEditForm({ inputOver272kCompletion: e.target.value })}
+                  placeholder={t('usage_stats.model_price_inherit_placeholder')}
+                  step="0.0001"
+                />
+              </div>
+              <div className={styles.formField}>
+                <label>{t('usage_stats.model_price_input_over_272k_cache')} ($/1M)</label>
+                <Input
+                  type="number"
+                  value={editForm.inputOver272kCache}
+                  onChange={(e) => updateEditForm({ inputOver272kCache: e.target.value })}
+                  placeholder={t('usage_stats.model_price_inherit_placeholder')}
+                  step="0.0001"
+                />
+              </div>
+            </>
+          )}
         </div>
       </Modal>
     </Card>

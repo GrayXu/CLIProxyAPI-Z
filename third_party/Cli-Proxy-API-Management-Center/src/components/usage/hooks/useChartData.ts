@@ -1,8 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ChartOptions } from 'chart.js';
 import { buildChartData, type ChartData } from '@/utils/usage';
 import { buildChartOptions } from '@/utils/usage/chartConfig';
 import type { UsagePayload } from './useUsageData';
+
+type ChartPeriod = 'hour' | 'day';
 
 export interface UseChartDataOptions {
   usage: UsagePayload | null;
@@ -10,13 +12,14 @@ export interface UseChartDataOptions {
   isDark: boolean;
   isMobile: boolean;
   hourWindowHours?: number;
+  preferredPeriod: ChartPeriod;
 }
 
 export interface UseChartDataReturn {
-  requestsPeriod: 'hour' | 'day';
-  setRequestsPeriod: (period: 'hour' | 'day') => void;
-  tokensPeriod: 'hour' | 'day';
-  setTokensPeriod: (period: 'hour' | 'day') => void;
+  requestsPeriod: ChartPeriod;
+  setRequestsPeriod: (period: ChartPeriod) => void;
+  tokensPeriod: ChartPeriod;
+  setTokensPeriod: (period: ChartPeriod) => void;
   requestsChartData: ChartData;
   tokensChartData: ChartData;
   requestsChartOptions: ChartOptions<'line'>;
@@ -28,10 +31,16 @@ export function useChartData({
   chartLines,
   isDark,
   isMobile,
-  hourWindowHours
+  hourWindowHours,
+  preferredPeriod
 }: UseChartDataOptions): UseChartDataReturn {
-  const [requestsPeriod, setRequestsPeriod] = useState<'hour' | 'day'>('day');
-  const [tokensPeriod, setTokensPeriod] = useState<'hour' | 'day'>('day');
+  const [requestsPeriod, setRequestsPeriod] = useState<ChartPeriod>(preferredPeriod);
+  const [tokensPeriod, setTokensPeriod] = useState<ChartPeriod>(preferredPeriod);
+
+  useEffect(() => {
+    setRequestsPeriod(preferredPeriod);
+    setTokensPeriod(preferredPeriod);
+  }, [preferredPeriod]);
 
   const requestsChartData = useMemo(() => {
     if (!usage) return { labels: [], datasets: [] };
