@@ -58,6 +58,7 @@ func TestSQLiteUsageStoreReloadsPersistedRecords(t *testing.T) {
 			ModelName: "gpt-5",
 			Detail: RequestDetail{
 				Timestamp:         ts1,
+				LatencyMs:         900,
 				Source:            "chat",
 				AuthIndex:         "0",
 				ServiceTier:       "priority",
@@ -74,6 +75,7 @@ func TestSQLiteUsageStoreReloadsPersistedRecords(t *testing.T) {
 			ModelName: "gpt-5",
 			Detail: RequestDetail{
 				Timestamp:         ts2,
+				LatencyMs:         1200,
 				Source:            "chat",
 				AuthIndex:         "0",
 				ServiceTier:       "",
@@ -121,6 +123,9 @@ func TestSQLiteUsageStoreReloadsPersistedRecords(t *testing.T) {
 	if modelSnapshot.Details[0].ServiceTier != "priority" {
 		t.Fatalf("expected first request detail service tier priority, got %q", modelSnapshot.Details[0].ServiceTier)
 	}
+	if modelSnapshot.Details[0].LatencyMs != 900 {
+		t.Fatalf("expected first request detail latency 900ms, got %d", modelSnapshot.Details[0].LatencyMs)
+	}
 	if !modelSnapshot.Details[0].RequestedFastMode {
 		t.Fatal("expected first request detail requested fast mode to be true")
 	}
@@ -146,6 +151,7 @@ func TestSQLiteUsageStoreInsertSnapshotDeduplicates(t *testing.T) {
 						Details: []RequestDetail{
 							{
 								Timestamp:         time.Date(2026, 3, 10, 11, 0, 0, 0, time.UTC),
+								LatencyMs:         100,
 								Source:            "chat",
 								AuthIndex:         "1",
 								ServiceTier:       "priority",
@@ -171,6 +177,7 @@ func TestSQLiteUsageStoreInsertSnapshotDeduplicates(t *testing.T) {
 		t.Fatalf("unexpected first result: %+v", first)
 	}
 
+	snapshot.APIs["key-1"].Models["gpt-5"].Details[0].LatencyMs = 2500
 	second, err := store.insertSnapshot(snapshot)
 	if err != nil {
 		t.Fatalf("second insert snapshot: %v", err)

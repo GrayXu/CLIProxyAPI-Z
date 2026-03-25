@@ -355,6 +355,7 @@ func (s *sqliteUsageStore) init() error {
 			api_name TEXT NOT NULL,
 			model_name TEXT NOT NULL,
 			requested_at_unix_ns INTEGER NOT NULL,
+			latency_ms INTEGER NOT NULL DEFAULT 0,
 			source TEXT NOT NULL DEFAULT '',
 			auth_index TEXT NOT NULL DEFAULT '',
 			service_tier TEXT NOT NULL DEFAULT '',
@@ -377,6 +378,11 @@ func (s *sqliteUsageStore) init() error {
 	if _, err := s.db.Exec(`ALTER TABLE usage_records ADD COLUMN service_tier TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 			return fmt.Errorf("add usage sqlite service_tier column: %w", err)
+		}
+	}
+	if _, err := s.db.Exec(`ALTER TABLE usage_records ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return fmt.Errorf("add usage sqlite latency_ms column: %w", err)
 		}
 	}
 	if _, err := s.db.Exec(`ALTER TABLE usage_records ADD COLUMN requested_fast_mode INTEGER NOT NULL DEFAULT 0`); err != nil {
@@ -403,9 +409,9 @@ func (s *sqliteUsageStore) insertBatch(records []persistedUsageRecord) error {
 		return fmt.Errorf("begin usage sqlite transaction: %w", err)
 	}
 	stmt, err := tx.PrepareContext(context.Background(), `INSERT OR IGNORE INTO usage_records (
-		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, requested_fast_mode, failed,
+		dedup_key, api_name, model_name, requested_at_unix_ns, latency_ms, source, auth_index, service_tier, requested_fast_mode, failed,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("prepare usage sqlite insert: %w", err)
@@ -422,6 +428,7 @@ func (s *sqliteUsageStore) insertBatch(records []persistedUsageRecord) error {
 			record.APIName,
 			record.ModelName,
 			detail.Timestamp.UnixNano(),
+			detail.LatencyMs,
 			detail.Source,
 			detail.AuthIndex,
 			detail.ServiceTier,
@@ -476,9 +483,9 @@ func (s *sqliteUsageStore) insertSnapshot(snapshot StatisticsSnapshot) (MergeRes
 		return MergeResult{}, fmt.Errorf("begin usage sqlite import transaction: %w", err)
 	}
 	stmt, err := tx.PrepareContext(context.Background(), `INSERT OR IGNORE INTO usage_records (
-		dedup_key, api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, requested_fast_mode, failed,
+		dedup_key, api_name, model_name, requested_at_unix_ns, latency_ms, source, auth_index, service_tier, requested_fast_mode, failed,
 		input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return MergeResult{}, fmt.Errorf("prepare usage sqlite import: %w", err)
@@ -494,6 +501,7 @@ func (s *sqliteUsageStore) insertSnapshot(snapshot StatisticsSnapshot) (MergeRes
 			record.APIName,
 			record.ModelName,
 			record.Detail.Timestamp.UnixNano(),
+			record.Detail.LatencyMs,
 			record.Detail.Source,
 			record.Detail.AuthIndex,
 			record.Detail.ServiceTier,
@@ -530,7 +538,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 	if s == nil || s.db == nil || stats == nil {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT api_name, model_name, requested_at_unix_ns, source, auth_index, service_tier, requested_fast_mode, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens FROM usage_records ORDER BY id`)
+	rows, err := s.db.Query(`SELECT api_name, model_name, requested_at_unix_ns, latency_ms, source, auth_index, service_tier, requested_fast_mode, failed, input_tokens, output_tokens, reasoning_tokens, cached_tokens, total_tokens FROM usage_records ORDER BY id`)
 	if err != nil {
 		return fmt.Errorf("query usage sqlite records: %w", err)
 	}
@@ -545,6 +553,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 			apiName           string
 			modelName         string
 			requestedAtUnix   int64
+			latencyMs         int64
 			source            string
 			authIndex         string
 			serviceTier       string
@@ -556,6 +565,7 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 			&apiName,
 			&modelName,
 			&requestedAtUnix,
+			&latencyMs,
 			&source,
 			&authIndex,
 			&serviceTier,
@@ -578,6 +588,10 @@ func (s *sqliteUsageStore) loadInto(stats *RequestStatistics) error {
 			modelName = "unknown"
 		}
 		detail.Timestamp = time.Unix(0, requestedAtUnix)
+		if latencyMs < 0 {
+			latencyMs = 0
+		}
+		detail.LatencyMs = latencyMs
 		detail.Source = source
 		detail.AuthIndex = authIndex
 		detail.ServiceTier = strings.TrimSpace(serviceTier)

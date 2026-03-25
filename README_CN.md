@@ -1,6 +1,6 @@
 # CLI 代理 API
 
-[English](README.md) | 中文
+[English](README.md) | 中文 | [日本語](README_JA.md)
 
 ## 这个 Fork 做了什么
 

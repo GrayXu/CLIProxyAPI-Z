@@ -75,17 +75,7 @@ func (r *usageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 	}
 	detail.RequestedFastMode = r.requestedFastMode
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, usage.Record{
-			Provider:    r.provider,
-			Model:       r.model,
-			Source:      r.source,
-			APIKey:      r.apiKey,
-			AuthID:      r.authID,
-			AuthIndex:   r.authIndex,
-			RequestedAt: r.requestedAt,
-			Failed:      failed,
-			Detail:      detail,
-		})
+		usage.PublishRecord(ctx, r.buildRecord(detail, failed))
 	})
 }
 
@@ -98,18 +88,38 @@ func (r *usageReporter) ensurePublished(ctx context.Context) {
 		return
 	}
 	r.once.Do(func() {
-		usage.PublishRecord(ctx, usage.Record{
-			Provider:    r.provider,
-			Model:       r.model,
-			Source:      r.source,
-			APIKey:      r.apiKey,
-			AuthID:      r.authID,
-			AuthIndex:   r.authIndex,
-			RequestedAt: r.requestedAt,
-			Failed:      false,
-			Detail:      usage.Detail{RequestedFastMode: r.requestedFastMode},
-		})
+		usage.PublishRecord(ctx, r.buildRecord(usage.Detail{}, false))
 	})
+}
+
+func (r *usageReporter) buildRecord(detail usage.Detail, failed bool) usage.Record {
+	if r == nil {
+		return usage.Record{Detail: detail, Failed: failed}
+	}
+	detail.RequestedFastMode = r.requestedFastMode
+	return usage.Record{
+		Provider:    r.provider,
+		Model:       r.model,
+		Source:      r.source,
+		APIKey:      r.apiKey,
+		AuthID:      r.authID,
+		AuthIndex:   r.authIndex,
+		RequestedAt: r.requestedAt,
+		Latency:     r.latency(),
+		Failed:      failed,
+		Detail:      detail,
+	}
+}
+
+func (r *usageReporter) latency() time.Duration {
+	if r == nil || r.requestedAt.IsZero() {
+		return 0
+	}
+	latency := time.Since(r.requestedAt)
+	if latency < 0 {
+		return 0
+	}
+	return latency
 }
 
 func (r *usageReporter) setRequestedFastModeFromPayload(payload []byte) {
