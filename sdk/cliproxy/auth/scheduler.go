@@ -19,6 +19,7 @@ const (
 	schedulerStrategyRoundRobin
 	schedulerStrategyFillFirst
 	schedulerStrategyQuotaSticky
+	schedulerStrategyCodexQuotaSmart
 )
 
 // scheduledState describes how an auth currently participates in a model shard.
@@ -120,6 +121,8 @@ func selectorStrategy(selector Selector) schedulerStrategy {
 		return schedulerStrategyFillFirst
 	case *QuotaStickySelector:
 		return schedulerStrategyQuotaSticky
+	case *CodexQuotaSmartSelector:
+		return schedulerStrategyCodexQuotaSmart
 	case nil, *RoundRobinSelector:
 		return schedulerStrategyRoundRobin
 	default:
@@ -832,6 +835,8 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 		picked = view.pickFillFirst(predicate)
 	} else if strategy == schedulerStrategyQuotaSticky {
 		picked = view.pickHighestQuotaScore(m.modelKey, predicate)
+	} else if strategy == schedulerStrategyCodexQuotaSmart {
+		picked = pickCodexQuotaSmartReady(view.flat, m.modelKey, &view.cursor, predicate)
 	} else {
 		picked = view.pickRoundRobin(predicate)
 	}

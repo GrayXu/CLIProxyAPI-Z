@@ -242,6 +242,132 @@ func TestSchedulerPick_MixedProvidersQuotaStickyPrefersHighestQuotaScore(t *test
 	}
 }
 
+func TestSchedulerPick_CodexQuotaSmartPrefersPrewarmCandidate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	prewarm := &Auth{
+		ID:       "codex-prewarm",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"account_id": "acct-prewarm",
+		},
+	}
+	StoreCodexQuotaSmartState(prewarm, codexQuotaSmartState{
+		SnapshotAt: now.Add(-2 * time.Hour).Format(time.RFC3339),
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.8),
+			ResetAt:           now.Add(30 * time.Minute).Format(time.RFC3339),
+		},
+	})
+
+	started := &Auth{
+		ID:       "codex-started",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"account_id": "acct-started",
+		},
+	}
+	StoreCodexQuotaSmartState(started, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.2),
+				ResetAt:           now.Add(45 * time.Minute).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.9),
+			ResetAt:           now.Add(20 * time.Minute).Format(time.RFC3339),
+		},
+	})
+
+	scheduler := newSchedulerForTest(&CodexQuotaSmartSelector{}, prewarm, started)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != prewarm.ID {
+		t.Fatalf("pickSingle() auth = %v, want %s", got, prewarm.ID)
+	}
+}
+
+func TestSchedulerPick_CodexQuotaSmartUsesWeeklyUrgencyThenFiveHourSmoothing(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	authA := &Auth{
+		ID:       "codex-a",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-a"},
+	}
+	StoreCodexQuotaSmartState(authA, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.3),
+				ResetAt:           now.Add(1 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.2),
+			ResetAt:           now.Add(40 * time.Minute).Format(time.RFC3339),
+		},
+		Local5HEvents: []int64{now.Add(-20 * time.Minute).Unix(), now.Add(-10 * time.Minute).Unix()},
+	})
+	authB := &Auth{
+		ID:       "codex-b",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-b"},
+	}
+	StoreCodexQuotaSmartState(authB, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.28),
+				ResetAt:           now.Add(1 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.9),
+			ResetAt:           now.Add(35 * time.Minute).Format(time.RFC3339),
+		},
+		Local5HEvents: []int64{now.Add(-15 * time.Minute).Unix()},
+	})
+	authC := &Auth{
+		ID:       "codex-c",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-c"},
+	}
+	StoreCodexQuotaSmartState(authC, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.05),
+				ResetAt:           now.Add(10 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(1.0),
+			ResetAt:           now.Add(4 * time.Hour).Format(time.RFC3339),
+		},
+	})
+
+	scheduler := newSchedulerForTest(&CodexQuotaSmartSelector{}, authA, authB, authC)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != authB.ID {
+		t.Fatalf("pickSingle() auth = %v, want %s", got, authB.ID)
+	}
+}
+
+func floatPtr(v float64) *float64 {
+	return &v
+}
+
 func TestSchedulerPick_RoundRobinTemporaryPriorityBoostOverridesBasePriority(t *testing.T) {
 	t.Parallel()
 

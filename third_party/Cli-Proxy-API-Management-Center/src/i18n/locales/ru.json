@@ -171,11 +171,12 @@
     "ws_auth_enable": "Требовать аутентификацию для /ws/*",
     "routing_title": "Стратегия маршрутизации",
     "routing_strategy_label": "Стратегия маршрутизации:",
-    "routing_strategy_hint": "round-robin циклически перебирает ключи; fill-first отдаёт приоритет первому доступному ключу; quota-sticky предпочитает ключи с более высоким квотным рейтингом и сохраняет липкость сессии.",
+    "routing_strategy_hint": "round-robin циклически перебирает ключи; fill-first отдаёт приоритет первому доступному ключу; quota-sticky предпочитает ключи с более высоким квотным рейтингом и сохраняет липкость сессии; quota-smart заранее прогревает недельное окно Codex и сглаживает трафик по 5-часовому окну внутри верхней группы.",
     "routing_strategy_update": "Обновить",
     "routing_strategy_round_robin": "round-robin (цикл)",
     "routing_strategy_fill_first": "fill-first (приоритет)",
-    "routing_strategy_quota_sticky": "quota-sticky (липкая квота)"
+    "routing_strategy_quota_sticky": "quota-sticky (липкая квота)",
+    "routing_strategy_quota_smart": "quota-smart (умная квота)"
   },
   "api_keys": {
     "title": "Управление API-ключами",
@@ -1238,10 +1239,11 @@
           "max_retry_credentials_hint": "Оставьте пустым, чтобы не задавать поле. Значение 0 сохраняет legacy-поведение и позволяет перебрать все доступные учётные данные.",
           "max_retry_interval": "Максимальный интервал повтора (сек)",
           "routing_strategy": "Стратегия маршрутизации",
-          "routing_strategy_hint": "Выберите стратегию подбора учётных данных: round-robin, fill-first или quota-sticky.",
+          "routing_strategy_hint": "Выберите стратегию подбора учётных данных: round-robin, fill-first, quota-sticky или quota-smart.",
           "strategy_round_robin": "По кругу",
           "strategy_fill_first": "Сначала заполнить",
           "strategy_quota_sticky": "Липкая квота",
+          "strategy_quota_smart": "Умная квота",
           "force_model_prefix": "Принудительный префикс модели",
           "force_model_prefix_desc": "Запросы к моделям без префикса используют только учётные данные без префикса",
           "ws_auth": "Аутентификация WebSocket",

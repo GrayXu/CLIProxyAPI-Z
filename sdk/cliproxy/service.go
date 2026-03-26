@@ -117,6 +117,8 @@ func normalizeRoutingStrategy(strategy string) string {
 		return "fill-first"
 	case "quota-sticky", "quotasticky", "qs":
 		return "quota-sticky"
+	case "quota-smart", "quotasmart", "qsm", "codex-quota-smart", "codexquotasmart", "cqs":
+		return "quota-smart"
 	default:
 		return "round-robin"
 	}
@@ -128,6 +130,8 @@ func selectorForRoutingStrategy(strategy string) coreauth.Selector {
 		return &coreauth.FillFirstSelector{}
 	case "quota-sticky":
 		return &coreauth.QuotaStickySelector{}
+	case "quota-smart":
+		return &coreauth.CodexQuotaSmartSelector{}
 	default:
 		return &coreauth.RoundRobinSelector{}
 	}

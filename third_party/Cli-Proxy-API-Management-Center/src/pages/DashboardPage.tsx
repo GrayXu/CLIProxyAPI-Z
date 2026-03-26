@@ -296,9 +296,11 @@ export function DashboardPage() {
     : routingStrategyRaw === 'round-robin'
       ? t('basic_settings.routing_strategy_round_robin')
       : routingStrategyRaw === 'fill-first'
-        ? t('basic_settings.routing_strategy_fill_first')
-        : routingStrategyRaw === 'quota-sticky'
-          ? t('basic_settings.routing_strategy_quota_sticky')
+      ? t('basic_settings.routing_strategy_fill_first')
+      : routingStrategyRaw === 'quota-sticky'
+        ? t('basic_settings.routing_strategy_quota_sticky')
+        : routingStrategyRaw === 'quota-smart'
+          ? t('basic_settings.routing_strategy_quota_smart')
         : routingStrategyRaw;
   const routingStrategyBadgeClass = !routingStrategyRaw
     ? styles.configBadgeUnknown

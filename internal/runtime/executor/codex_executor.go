@@ -617,6 +617,7 @@ func (e *CodexExecutor) refreshQuotaSnapshot(ctx context.Context, auth *cliproxy
 		return
 	}
 	cliproxyauth.StoreCodexQuotaSnapshot(auth, payload, now)
+	cliproxyauth.UpdateCodexQuotaSmartStateFromSnapshot(auth, payload, now)
 	if hasWeeklyWindow {
 		cliproxyauth.StoreRoutingWeeklySnapshot(auth, resetAt, now)
 		return

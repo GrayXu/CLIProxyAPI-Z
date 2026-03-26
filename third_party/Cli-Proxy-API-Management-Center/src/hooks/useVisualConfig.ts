@@ -514,11 +514,13 @@ export function useVisualConfig() {
         ),
 
         routingStrategy:
-          routing?.strategy === 'quota-sticky'
-            ? 'quota-sticky'
-            : routing?.strategy === 'fill-first'
-              ? 'fill-first'
-              : 'round-robin',
+          routing?.strategy === 'quota-smart' || routing?.strategy === 'codex-quota-smart'
+            ? 'quota-smart'
+            : routing?.strategy === 'quota-sticky'
+              ? 'quota-sticky'
+              : routing?.strategy === 'fill-first'
+                ? 'fill-first'
+                : 'round-robin',
 
         payloadDefaultRules: parsePayloadRules(payload?.default),
         payloadDefaultRawRules: parseRawPayloadRules(payload?.['default-raw']),

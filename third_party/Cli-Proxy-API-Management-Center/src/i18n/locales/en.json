@@ -171,11 +171,12 @@
     "ws_auth_enable": "Require auth for /ws/*",
     "routing_title": "Routing Strategy",
     "routing_strategy_label": "Routing strategy:",
-    "routing_strategy_hint": "round-robin cycles through keys; fill-first prioritizes the first available key; quota-sticky prefers higher quota credentials and keeps requests sticky.",
+    "routing_strategy_hint": "round-robin cycles through keys; fill-first prioritizes the first available key; quota-sticky prefers higher quota credentials and keeps requests sticky; quota-smart prewarms Codex weekly windows and smooths within top weekly candidates.",
     "routing_strategy_update": "Update",
     "routing_strategy_round_robin": "round-robin (cycle)",
     "routing_strategy_fill_first": "fill-first (prioritize)",
-    "routing_strategy_quota_sticky": "quota-sticky (quota sticky)"
+    "routing_strategy_quota_sticky": "quota-sticky (quota sticky)",
+    "routing_strategy_quota_smart": "quota-smart (quota smart)"
   },
   "api_keys": {
     "title": "API Keys Management",
@@ -1233,10 +1234,11 @@
           "max_retry_credentials_hint": "Leave empty to keep it unset. Set to 0 to preserve legacy behavior and try all available credentials.",
           "max_retry_interval": "Max Retry Interval (seconds)",
           "routing_strategy": "Routing Strategy",
-          "routing_strategy_hint": "Select credential selection strategy, including round-robin, fill-first, and quota-sticky.",
+          "routing_strategy_hint": "Select credential selection strategy, including round-robin, fill-first, quota-sticky, and quota-smart.",
           "strategy_round_robin": "Round Robin",
           "strategy_fill_first": "Fill First",
           "strategy_quota_sticky": "Quota Sticky",
+          "strategy_quota_smart": "Quota Smart",
           "force_model_prefix": "Force Model Prefix",
           "force_model_prefix_desc": "Unprefixed model requests only use credentials without prefix",
           "ws_auth": "WebSocket Authentication",

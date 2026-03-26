@@ -6,6 +6,7 @@
 - Codex usage tracking for `service_tier` and requested fast mode
 - Bundled default management control panel HTML
 - `quota-sticky` routing strategy
+- `quota-smart` routing strategy for Codex weekly/5h quota scheduling
 - Management WebUI support for `quota-sticky`, `30d` usage range, fast mode request status, and advanced model pricing
 - Management WebUI route/capability-based hiding for viewer keys, so restricted pages are not rendered as empty panels
 - One-shot priority boost for auths refreshed with `routing_quota_score == 100`

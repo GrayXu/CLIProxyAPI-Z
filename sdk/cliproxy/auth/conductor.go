@@ -194,7 +194,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 
 func isBuiltInSelector(selector Selector) bool {
 	switch selector.(type) {
-	case *RoundRobinSelector, *FillFirstSelector, *QuotaStickySelector:
+	case *RoundRobinSelector, *FillFirstSelector, *QuotaStickySelector, *CodexQuotaSmartSelector:
 		return true
 	default:
 		return false
@@ -259,6 +259,52 @@ func (m *Manager) stickyRoutingEnabled() bool {
 	defer m.mu.RUnlock()
 	_, ok := m.selector.(*QuotaStickySelector)
 	return ok
+}
+
+func (m *Manager) codexQuotaSmartEnabled() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.selector.(*CodexQuotaSmartSelector)
+	return ok
+}
+
+func (m *Manager) shouldRecordCodexQuotaSmartPrewarm(auth *Auth) bool {
+	if !m.codexQuotaSmartEnabled() {
+		return false
+	}
+	return codexQuotaSmartShouldPrewarm(auth, time.Now().UTC())
+}
+
+func (m *Manager) recordCodexQuotaSmartSuccess(ctx context.Context, authID string, prewarm bool) {
+	if m == nil || !m.codexQuotaSmartEnabled() {
+		return
+	}
+	now := time.Now().UTC()
+
+	m.mu.Lock()
+	current := m.auths[authID]
+	if current == nil {
+		m.mu.Unlock()
+		return
+	}
+	updated := current.Clone()
+	if !codexQuotaSmartRecordSuccess(updated, now, prewarm) {
+		m.mu.Unlock()
+		return
+	}
+	m.auths[authID] = updated
+	m.mu.Unlock()
+
+	if m.scheduler != nil {
+		m.scheduler.upsertAuth(updated.Clone())
+	}
+	_ = m.persist(ctx, updated)
+	if prewarm && m.markRefreshPending(authID, now) {
+		go m.refreshAuth(context.Background(), authID)
+	}
 }
 
 // SetStore swaps the underlying persistence store.
@@ -584,7 +630,7 @@ func readStreamBootstrap(ctx context.Context, ch <-chan cliproxyexecutor.StreamC
 	}
 }
 
-func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, resultModel string, headers http.Header, buffered []cliproxyexecutor.StreamChunk, remaining <-chan cliproxyexecutor.StreamChunk) *cliproxyexecutor.StreamResult {
+func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, resultModel string, headers http.Header, buffered []cliproxyexecutor.StreamChunk, remaining <-chan cliproxyexecutor.StreamChunk, prewarm bool) *cliproxyexecutor.StreamResult {
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
 		defer close(out)
@@ -628,12 +674,14 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 		}
 		if !failed {
 			m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: true})
+			m.recordCodexQuotaSmartSuccess(ctx, auth.ID, prewarm)
+			m.consumePriorityBoost(auth.ID)
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: out}
 }
 
-func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor ProviderExecutor, auth *Auth, provider string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, routeModel string, execModels []string, pooled bool) (*cliproxyexecutor.StreamResult, error) {
+func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor ProviderExecutor, auth *Auth, provider string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, routeModel string, execModels []string, pooled bool, prewarm bool) (*cliproxyexecutor.StreamResult, error) {
 	if executor == nil {
 		return nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
@@ -718,8 +766,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			close(closedCh)
 			remaining = closedCh
 		}
-		m.consumePriorityBoost(auth.ID)
-		return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining), nil
+		return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining, prewarm), nil
 	}
 	if lastErr == nil {
 		lastErr = &Error{Code: "auth_not_found", Message: "no upstream model available"}
@@ -1127,6 +1174,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
+		prewarmSelection := m.shouldRecordCodexQuotaSmartPrewarm(auth)
 		var authErr error
 		for _, upstreamModel := range models {
 			resultModel := executionResultModel(routeModel, upstreamModel, pooled)
@@ -1153,6 +1201,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				continue
 			}
 			m.MarkResult(execCtx, result)
+			m.recordCodexQuotaSmartSuccess(execCtx, auth.ID, prewarmSelection)
 			m.consumePriorityBoost(auth.ID)
 			return resp, nil
 		}
@@ -1314,7 +1363,8 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			continue
 		}
 		attempted[auth.ID] = struct{}{}
-		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, req, pickOpts, routeModel, models, pooled)
+		prewarmSelection := m.shouldRecordCodexQuotaSmartPrewarm(auth)
+		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, req, pickOpts, routeModel, models, pooled, prewarmSelection)
 		if errStream != nil {
 			if errCtx := execCtx.Err(); errCtx != nil {
 				return nil, errCtx

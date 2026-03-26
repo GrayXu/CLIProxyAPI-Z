@@ -8,6 +8,7 @@
 - 为 Codex 使用统计补充 `service_tier` 与请求 fast mode 的追踪
 - 内置默认管理面板 `management.html`
 - 新增 `quota-sticky` 路由策略
+- 新增 `quota-smart` 路由策略，用于 Codex 周/5 小时配额调度
 - 对 `routing_quota_score == 100` 的刚刷新认证提供一次性优先提升
 
 一个为 CLI 提供 OpenAI/Gemini/Claude/Codex 兼容 API 接口的代理服务器。
