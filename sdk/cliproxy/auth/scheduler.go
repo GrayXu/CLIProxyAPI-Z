@@ -829,7 +829,7 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	}
 	var picked *scheduledAuth
 	if strategy == schedulerStrategyFillFirst {
-		picked = view.pickFirst(predicate)
+		picked = view.pickFillFirst(predicate)
 	} else if strategy == schedulerStrategyQuotaSticky {
 		picked = view.pickHighestQuotaScore(m.modelKey, predicate)
 	} else {
@@ -988,6 +988,20 @@ func (v *readyView) pickFirst(predicate func(*scheduledAuth) bool) *scheduledAut
 	return nil
 }
 
+// pickFillFirst returns the preferred ready entry without advancing cursors.
+func (v *readyView) pickFillFirst(predicate func(*scheduledAuth) bool) *scheduledAuth {
+	var best *scheduledAuth
+	for _, entry := range v.flat {
+		if predicate != nil && !predicate(entry) {
+			continue
+		}
+		if best == nil || betterScheduledAuthForFillFirst(entry, best) {
+			best = entry
+		}
+	}
+	return best
+}
+
 // pickRoundRobin returns the next ready entry using flat or grouped round-robin traversal.
 func (v *readyView) pickRoundRobin(predicate func(*scheduledAuth) bool) *scheduledAuth {
 	if len(v.parentOrder) > 1 && len(v.children) > 0 {
@@ -1024,6 +1038,16 @@ func (v *readyView) pickHighestQuotaScore(model string, predicate func(*schedule
 		}
 	}
 	return best
+}
+
+func betterScheduledAuthForFillFirst(candidate *scheduledAuth, current *scheduledAuth) bool {
+	if candidate == nil || candidate.auth == nil {
+		return false
+	}
+	if current == nil || current.auth == nil {
+		return true
+	}
+	return betterAuthForFillFirst(candidate.auth, current.auth)
 }
 
 // pickGroupedRoundRobin rotates across parents first and then within the selected parent.

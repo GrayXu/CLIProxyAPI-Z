@@ -2642,6 +2642,9 @@ func (m *Manager) shouldRefresh(a *Auth, now time.Time) bool {
 	if evaluator, ok := a.Runtime.(RefreshEvaluator); ok && evaluator != nil {
 		return evaluator.ShouldRefresh(now, a)
 	}
+	if codexQuotaSnapshotNeedsRefresh(a, now) {
+		return true
+	}
 
 	lastRefresh := a.LastRefreshedAt
 	if lastRefresh.IsZero() {

@@ -5,7 +5,7 @@
 
 import type { ChartOptions } from 'chart.js';
 
-const SPARKLINE_TENSION = 0.2;
+const SPARKLINE_TENSION = 0;
 
 /**
  * Static sparkline chart options (no dependencies on theme/mobile)

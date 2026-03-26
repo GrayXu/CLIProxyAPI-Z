@@ -119,6 +119,55 @@ func TestSchedulerPick_FillFirstSticksToFirstReady(t *testing.T) {
 	}
 }
 
+func TestSchedulerPick_FillFirstCodexPrefersNearestWeeklyResetThenAuthID(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	scheduler := newSchedulerForTest(
+		&FillFirstSelector{},
+		&Auth{
+			ID:       "a",
+			Provider: "codex",
+			Metadata: map[string]any{
+				routingWeeklyResetAtMetadataKey: now.Add(2 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		&Auth{
+			ID:       "z",
+			Provider: "codex",
+			Metadata: map[string]any{
+				routingWeeklyResetAtMetadataKey: now.Add(15 * time.Minute).Format(time.RFC3339),
+			},
+		},
+	)
+
+	for index := 0; index < 3; index++ {
+		got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+		if errPick != nil {
+			t.Fatalf("pickSingle() #%d error = %v", index, errPick)
+		}
+		if got == nil {
+			t.Fatalf("pickSingle() #%d auth = nil", index)
+		}
+		if got.ID != "z" {
+			t.Fatalf("pickSingle() #%d auth.ID = %q, want %q", index, got.ID, "z")
+		}
+	}
+
+	scheduler = newSchedulerForTest(
+		&FillFirstSelector{},
+		&Auth{ID: "a", Provider: "codex"},
+		&Auth{ID: "z", Provider: "codex"},
+	)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() fallback error = %v", errPick)
+	}
+	if got == nil || got.ID != "a" {
+		t.Fatalf("pickSingle() fallback auth = %v, want a", got)
+	}
+}
+
 func TestSchedulerPick_QuotaStickyPrefersHighestQuotaScoreWithinPriorityBucket(t *testing.T) {
 	t.Parallel()
 

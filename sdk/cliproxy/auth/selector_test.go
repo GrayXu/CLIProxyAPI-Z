@@ -34,6 +34,49 @@ func TestFillFirstSelectorPick_Deterministic(t *testing.T) {
 	}
 }
 
+func TestFillFirstSelectorPick_CodexPrefersNearestWeeklyResetThenAuthID(t *testing.T) {
+	t.Parallel()
+
+	selector := &FillFirstSelector{}
+	now := time.Now().UTC()
+	auths := []*Auth{
+		{
+			ID:       "a",
+			Provider: "codex",
+			Metadata: map[string]any{
+				routingWeeklyResetAtMetadataKey: now.Add(2 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		{
+			ID:       "z",
+			Provider: "codex",
+			Metadata: map[string]any{
+				routingWeeklyResetAtMetadataKey: now.Add(30 * time.Minute).Format(time.RFC3339),
+			},
+		},
+	}
+
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, auths)
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got == nil {
+		t.Fatalf("Pick() auth = nil")
+	}
+	if got.ID != "z" {
+		t.Fatalf("Pick() auth.ID = %q, want %q", got.ID, "z")
+	}
+
+	auths[1].Metadata[routingWeeklyResetAtMetadataKey] = now.Add(2 * time.Hour).Format(time.RFC3339)
+	got, err = selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, auths)
+	if err != nil {
+		t.Fatalf("Pick() second error = %v", err)
+	}
+	if got == nil || got.ID != "a" {
+		t.Fatalf("Pick() second auth = %v, want a", got)
+	}
+}
+
 func TestRoundRobinSelectorPick_CyclesDeterministic(t *testing.T) {
 	t.Parallel()
 

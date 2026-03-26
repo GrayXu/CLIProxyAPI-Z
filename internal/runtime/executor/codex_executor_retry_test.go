@@ -60,6 +60,53 @@ func TestParseCodexRetryAfter(t *testing.T) {
 	})
 }
 
+func TestExtractCodexWeeklyResetAt(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+
+	t.Run("prefers weekly window by duration", func(t *testing.T) {
+		resetAt := now.Add(3 * time.Hour).Unix()
+		body := []byte(`{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"reset_at":1},"secondary_window":{"limit_window_seconds":604800,"reset_at":` + itoa(resetAt) + `}}}`)
+		got, ok := extractCodexWeeklyResetAt(body, now)
+		if !ok {
+			t.Fatalf("expected weekly reset, got none")
+		}
+		if !got.Equal(time.Unix(resetAt, 0).UTC()) {
+			t.Fatalf("weekly reset = %v, want %v", got, time.Unix(resetAt, 0).UTC())
+		}
+	})
+
+	t.Run("falls back to secondary window for legacy payload", func(t *testing.T) {
+		resetAt := now.Add(2 * time.Hour).Unix()
+		body := []byte(`{"rate_limit":{"primary_window":{"reset_at":1},"secondary_window":{"reset_at":` + itoa(resetAt) + `}}}`)
+		got, ok := extractCodexWeeklyResetAt(body, now)
+		if !ok {
+			t.Fatalf("expected weekly reset, got none")
+		}
+		if !got.Equal(time.Unix(resetAt, 0).UTC()) {
+			t.Fatalf("weekly reset = %v, want %v", got, time.Unix(resetAt, 0).UTC())
+		}
+	})
+
+	t.Run("uses reset_after_seconds when reset_at missing", func(t *testing.T) {
+		body := []byte(`{"rate_limit":{"secondary_window":{"limit_window_seconds":604800,"reset_after_seconds":600}}}`)
+		got, ok := extractCodexWeeklyResetAt(body, now)
+		if !ok {
+			t.Fatalf("expected weekly reset, got none")
+		}
+		want := now.Add(10 * time.Minute)
+		if !got.Equal(want) {
+			t.Fatalf("weekly reset = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("ignores code review weekly window", func(t *testing.T) {
+		body := []byte(`{"code_review_rate_limit":{"secondary_window":{"limit_window_seconds":604800,"reset_after_seconds":600}}}`)
+		if got, ok := extractCodexWeeklyResetAt(body, now); ok {
+			t.Fatalf("expected no weekly reset, got %v", got)
+		}
+	})
+}
+
 func itoa(v int64) string {
 	return strconv.FormatInt(v, 10)
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -476,5 +477,40 @@ func TestManager_RefreshPriorityBoost_NonFullRefreshClearsPendingBoost(t *testin
 	got := executor.ExecuteIDs()
 	if len(got) != 1 || got[0] != "high" {
 		t.Fatalf("execute IDs = %v, want [high]", got)
+	}
+}
+
+func TestManager_ShouldRefresh_CodexQuotaSnapshotInterval(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager(nil, &FillFirstSelector{}, nil)
+	now := time.Now().UTC()
+
+	freshAuth := &Auth{
+		ID:              "codex-fresh",
+		Provider:        "codex",
+		LastRefreshedAt: now,
+		Metadata: map[string]any{
+			"access_token":                     "token",
+			"account_id":                       "account",
+			routingWeeklySnapshotAtMetadataKey: now.Add(-5 * time.Minute).Format(time.RFC3339),
+		},
+	}
+	if manager.shouldRefresh(freshAuth, now) {
+		t.Fatalf("shouldRefresh(freshAuth) = true, want false")
+	}
+
+	staleAuth := freshAuth.Clone()
+	staleAuth.ID = "codex-stale"
+	staleAuth.Metadata[routingWeeklySnapshotAtMetadataKey] = now.Add(-11 * time.Minute).Format(time.RFC3339)
+	if !manager.shouldRefresh(staleAuth, now) {
+		t.Fatalf("shouldRefresh(staleAuth) = false, want true")
+	}
+
+	missingSnapshotAuth := freshAuth.Clone()
+	missingSnapshotAuth.ID = "codex-missing"
+	delete(missingSnapshotAuth.Metadata, routingWeeklySnapshotAtMetadataKey)
+	if !manager.shouldRefresh(missingSnapshotAuth, now) {
+		t.Fatalf("shouldRefresh(missingSnapshotAuth) = false, want true")
 	}
 }

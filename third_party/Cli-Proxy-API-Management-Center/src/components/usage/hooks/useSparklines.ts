@@ -43,7 +43,7 @@ export interface UseSparklinesReturn {
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const MAX_ALL_BUCKETS = 60;
-const SPARKLINE_TENSION = 0.2;
+const SPARKLINE_TENSION = 0;
 
 const formatHourLabel = (value: number): string => {
   const date = new Date(value);

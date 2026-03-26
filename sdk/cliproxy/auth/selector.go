@@ -363,7 +363,13 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 		return nil, err
 	}
 	available = preferCodexWebsocketAuths(ctx, provider, available)
-	return available[0], nil
+	best := available[0]
+	for i := 1; i < len(available); i++ {
+		if betterAuthForFillFirst(available[i], best) {
+			best = available[i]
+		}
+	}
+	return best, nil
 }
 
 // Pick selects the ready auth with the highest cached quota score.
