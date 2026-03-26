@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"sync"
@@ -513,4 +514,36 @@ func TestManager_ShouldRefresh_CodexQuotaSnapshotInterval(t *testing.T) {
 	if !manager.shouldRefresh(missingSnapshotAuth, now) {
 		t.Fatalf("shouldRefresh(missingSnapshotAuth) = false, want true")
 	}
+
+	idTokenOnlyAuth := &Auth{
+		ID:       "codex-id-token-only",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"access_token":                     "token",
+			"id_token":                         testJWTWithAccountID("account-from-jwt"),
+			routingWeeklySnapshotAtMetadataKey: now.Add(-11 * time.Minute).Format(time.RFC3339),
+		},
+	}
+	if !manager.shouldRefresh(idTokenOnlyAuth, now) {
+		t.Fatalf("shouldRefresh(idTokenOnlyAuth) = false, want true")
+	}
+
+	invalidIDTokenAuth := &Auth{
+		ID:       "codex-invalid-id-token",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"access_token":                     "token",
+			"id_token":                         "not-a-jwt",
+			routingWeeklySnapshotAtMetadataKey: now.Add(-11 * time.Minute).Format(time.RFC3339),
+		},
+	}
+	if manager.shouldRefresh(invalidIDTokenAuth, now) {
+		t.Fatalf("shouldRefresh(invalidIDTokenAuth) = true, want false")
+	}
+}
+
+func testJWTWithAccountID(accountID string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"` + accountID + `"}}`))
+	return header + "." + payload + ".signature"
 }

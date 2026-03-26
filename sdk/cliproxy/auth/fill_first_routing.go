@@ -3,6 +3,8 @@ package auth
 import (
 	"strings"
 	"time"
+
+	codexauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
 )
 
 const (
@@ -64,7 +66,7 @@ func codexQuotaSnapshotNeedsRefresh(auth *Auth, now time.Time) bool {
 	if !hasMetadataString(auth.Metadata, "access_token") {
 		return false
 	}
-	if !hasMetadataString(auth.Metadata, "account_id", "id_token") {
+	if !hasCodexQuotaAccountID(auth) {
 		return false
 	}
 
@@ -94,6 +96,20 @@ func StoreRoutingWeeklySnapshot(auth *Auth, resetAt *time.Time, snapshotAt time.
 		return
 	}
 	auth.Metadata[routingWeeklyResetAtMetadataKey] = resetAt.UTC().Format(time.RFC3339)
+}
+
+func StoreRoutingWeeklySnapshotObservedAt(auth *Auth, snapshotAt time.Time) {
+	if auth == nil {
+		return
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	if snapshotAt.IsZero() {
+		delete(auth.Metadata, routingWeeklySnapshotAtMetadataKey)
+		return
+	}
+	auth.Metadata[routingWeeklySnapshotAtMetadataKey] = snapshotAt.UTC().Format(time.RFC3339)
 }
 
 func ReadCodexQuotaSnapshot(auth *Auth) (string, bool) {
@@ -150,4 +166,41 @@ func hasMetadataString(meta map[string]any, keys ...string) bool {
 		}
 	}
 	return false
+}
+
+func hasCodexQuotaAccountID(auth *Auth) bool {
+	if auth == nil || len(auth.Metadata) == 0 {
+		return false
+	}
+	if hasMetadataString(auth.Metadata, "account_id") {
+		return true
+	}
+	idToken, ok := metadataStringValue(auth.Metadata, "id_token")
+	if !ok {
+		return false
+	}
+	claims, err := codexauth.ParseJWTToken(idToken)
+	if err != nil || claims == nil {
+		return false
+	}
+	return strings.TrimSpace(claims.GetAccountID()) != ""
+}
+
+func metadataStringValue(meta map[string]any, key string) (string, bool) {
+	if len(meta) == 0 {
+		return "", false
+	}
+	value, ok := meta[key]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
 }

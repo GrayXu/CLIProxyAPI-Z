@@ -611,19 +611,23 @@ func (e *CodexExecutor) refreshQuotaSnapshot(ctx context.Context, auth *cliproxy
 		return
 	}
 
-	payload, resetAt, err := e.fetchQuotaSnapshot(ctx, auth, accessToken, accountID, now)
+	payload, resetAt, hasWeeklyWindow, err := e.fetchQuotaSnapshot(ctx, auth, accessToken, accountID, now)
 	if err != nil {
 		log.WithError(err).Warnf("codex executor: failed to refresh weekly quota snapshot for auth %s", auth.ID)
 		return
 	}
 	cliproxyauth.StoreCodexQuotaSnapshot(auth, payload, now)
-	cliproxyauth.StoreRoutingWeeklySnapshot(auth, resetAt, now)
+	if hasWeeklyWindow {
+		cliproxyauth.StoreRoutingWeeklySnapshot(auth, resetAt, now)
+		return
+	}
+	cliproxyauth.StoreRoutingWeeklySnapshotObservedAt(auth, now)
 }
 
-func (e *CodexExecutor) fetchQuotaSnapshot(ctx context.Context, auth *cliproxyauth.Auth, accessToken string, accountID string, now time.Time) (string, *time.Time, error) {
+func (e *CodexExecutor) fetchQuotaSnapshot(ctx context.Context, auth *cliproxyauth.Auth, accessToken string, accountID string, now time.Time) (string, *time.Time, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, codexUsageURL, nil)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -634,22 +638,25 @@ func (e *CodexExecutor) fetchQuotaSnapshot(ctx context.Context, auth *cliproxyau
 	client := newProxyAwareHTTPClient(ctx, e.cfg, auth, 15*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", nil, fmt.Errorf("codex quota request returned %d", resp.StatusCode)
+		return "", nil, false, fmt.Errorf("codex quota request returned %d", resp.StatusCode)
+	}
+	if weeklyWindow := extractCodexWeeklyWindow(body); !weeklyWindow.Exists() || weeklyWindow.Type == gjson.Null {
+		return string(body), nil, false, nil
 	}
 	resetAt, ok := extractCodexWeeklyResetAt(body, now)
 	if !ok {
-		return string(body), nil, nil
+		return string(body), nil, true, nil
 	}
-	return string(body), &resetAt, nil
+	return string(body), &resetAt, true, nil
 }
 
 func resolveCodexQuotaAccountID(auth *cliproxyauth.Auth) string {
