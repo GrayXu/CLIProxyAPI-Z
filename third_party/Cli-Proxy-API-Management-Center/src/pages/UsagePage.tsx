@@ -204,7 +204,7 @@ export function UsagePage() {
     rpmSparkline,
     tpmSparkline,
     costSparkline
-  } = useSparklines({ usage: filteredUsage, loading, nowMs });
+  } = useSparklines({ usage: filteredUsage, loading, nowMs, timeRange });
 
   // Chart data hook
   const {

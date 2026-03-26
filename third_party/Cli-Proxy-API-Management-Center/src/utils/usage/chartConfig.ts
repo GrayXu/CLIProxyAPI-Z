@@ -5,6 +5,8 @@
 
 import type { ChartOptions } from 'chart.js';
 
+const SPARKLINE_TENSION = 0.2;
+
 /**
  * Static sparkline chart options (no dependencies on theme/mobile)
  */
@@ -13,7 +15,7 @@ export const sparklineOptions: ChartOptions<'line'> = {
   maintainAspectRatio: false,
   plugins: { legend: { display: false }, tooltip: { enabled: false } },
   scales: { x: { display: false }, y: { display: false } },
-  elements: { line: { tension: 0.45 }, point: { radius: 0 } }
+  elements: { line: { tension: SPARKLINE_TENSION }, point: { radius: 0 } }
 };
 
 export interface ChartConfigOptions {
