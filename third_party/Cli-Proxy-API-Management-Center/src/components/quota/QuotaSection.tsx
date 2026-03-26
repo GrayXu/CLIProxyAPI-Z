@@ -170,6 +170,20 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
   }, []);
 
   useEffect(() => {
+    if (loading) return;
+    if (config.type !== 'codex') return;
+    const targets = effectiveViewMode === 'all' ? filteredFiles : pageItems;
+    if (targets.length === 0) return;
+    const needsLoad = targets.some((file) => {
+      const state = quota[file.name];
+      return !state || (state as QuotaStatusState).status === 'idle';
+    });
+    if (!needsLoad) return;
+    const scope = effectiveViewMode === 'all' ? 'all' : 'page';
+    loadQuota(targets, scope, setLoading, { refresh: false });
+  }, [config.type, effectiveViewMode, filteredFiles, loadQuota, loading, pageItems, quota, setLoading]);
+
+  useEffect(() => {
     const wasLoading = prevFilesLoadingRef.current;
     prevFilesLoadingRef.current = loading;
 
@@ -181,7 +195,7 @@ export function QuotaSection<TState extends QuotaStatusState, TData>({
     const scope = effectiveViewMode === 'all' ? 'all' : 'page';
     const targets = effectiveViewMode === 'all' ? filteredFiles : pageItems;
     if (targets.length === 0) return;
-    loadQuota(targets, scope, setLoading);
+    loadQuota(targets, scope, setLoading, { refresh: config.type === 'codex' });
   }, [loading, effectiveViewMode, filteredFiles, pageItems, loadQuota, setLoading]);
 
   useEffect(() => {

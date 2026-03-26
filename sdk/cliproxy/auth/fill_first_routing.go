@@ -8,6 +8,8 @@ import (
 const (
 	routingWeeklyResetAtMetadataKey    = "routing_weekly_reset_at"
 	routingWeeklySnapshotAtMetadataKey = "routing_weekly_snapshot_at"
+	codexQuotaSnapshotMetadataKey      = "codex_quota_snapshot"
+	codexQuotaSnapshotAtMetadataKey    = "codex_quota_snapshot_at"
 	codexQuotaSnapshotRefreshInterval  = 10 * time.Minute
 )
 
@@ -92,6 +94,46 @@ func StoreRoutingWeeklySnapshot(auth *Auth, resetAt *time.Time, snapshotAt time.
 		return
 	}
 	auth.Metadata[routingWeeklyResetAtMetadataKey] = resetAt.UTC().Format(time.RFC3339)
+}
+
+func ReadCodexQuotaSnapshot(auth *Auth) (string, bool) {
+	if auth == nil || len(auth.Metadata) == 0 {
+		return "", false
+	}
+	value, ok := auth.Metadata[codexQuotaSnapshotMetadataKey]
+	if !ok {
+		return "", false
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
+}
+
+func StoreCodexQuotaSnapshot(auth *Auth, payload string, snapshotAt time.Time) {
+	if auth == nil {
+		return
+	}
+	if auth.Metadata == nil {
+		auth.Metadata = make(map[string]any)
+	}
+	payload = strings.TrimSpace(payload)
+	if payload == "" {
+		delete(auth.Metadata, codexQuotaSnapshotMetadataKey)
+		delete(auth.Metadata, codexQuotaSnapshotAtMetadataKey)
+		return
+	}
+	auth.Metadata[codexQuotaSnapshotMetadataKey] = payload
+	if snapshotAt.IsZero() {
+		delete(auth.Metadata, codexQuotaSnapshotAtMetadataKey)
+		return
+	}
+	auth.Metadata[codexQuotaSnapshotAtMetadataKey] = snapshotAt.UTC().Format(time.RFC3339)
 }
 
 func hasMetadataString(meta map[string]any, keys ...string) bool {

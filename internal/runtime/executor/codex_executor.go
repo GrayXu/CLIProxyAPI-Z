@@ -611,17 +611,19 @@ func (e *CodexExecutor) refreshQuotaSnapshot(ctx context.Context, auth *cliproxy
 		return
 	}
 
-	resetAt, err := e.fetchWeeklyQuotaResetAt(ctx, auth, accessToken, accountID, now)
+	payload, resetAt, err := e.fetchQuotaSnapshot(ctx, auth, accessToken, accountID, now)
 	if err != nil {
 		log.WithError(err).Warnf("codex executor: failed to refresh weekly quota snapshot for auth %s", auth.ID)
+		return
 	}
+	cliproxyauth.StoreCodexQuotaSnapshot(auth, payload, now)
 	cliproxyauth.StoreRoutingWeeklySnapshot(auth, resetAt, now)
 }
 
-func (e *CodexExecutor) fetchWeeklyQuotaResetAt(ctx context.Context, auth *cliproxyauth.Auth, accessToken string, accountID string, now time.Time) (*time.Time, error) {
+func (e *CodexExecutor) fetchQuotaSnapshot(ctx context.Context, auth *cliproxyauth.Auth, accessToken string, accountID string, now time.Time) (string, *time.Time, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, codexUsageURL, nil)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Content-Type", "application/json")
@@ -632,22 +634,22 @@ func (e *CodexExecutor) fetchWeeklyQuotaResetAt(ctx context.Context, auth *clipr
 	client := newProxyAwareHTTPClient(ctx, e.cfg, auth, 15*time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("codex quota request returned %d", resp.StatusCode)
+		return "", nil, fmt.Errorf("codex quota request returned %d", resp.StatusCode)
 	}
 	resetAt, ok := extractCodexWeeklyResetAt(body, now)
 	if !ok {
-		return nil, nil
+		return string(body), nil, nil
 	}
-	return &resetAt, nil
+	return string(body), &resetAt, nil
 }
 
 func resolveCodexQuotaAccountID(auth *cliproxyauth.Auth) string {

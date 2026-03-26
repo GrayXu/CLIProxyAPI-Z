@@ -2,13 +2,79 @@ package management
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
 )
+
+func TestCachedCodexQuotaSnapshotUsesStoredMetadata(t *testing.T) {
+	t.Parallel()
+
+	auth := &coreauth.Auth{
+		ID:       "codex-auth",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"plan_type": "plus",
+		},
+	}
+	coreauth.StoreCodexQuotaSnapshot(auth, `{"rate_limit":{"secondary_window":{"limit_window_seconds":604800,"reset_at":123}}}`, time.Now().UTC())
+
+	snapshot, ok := cachedCodexQuotaSnapshot(auth)
+	if !ok {
+		t.Fatal("expected cached snapshot")
+	}
+	if snapshot.Usage.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot.Usage.StatusCode = %d, want %d", snapshot.Usage.StatusCode, http.StatusOK)
+	}
+	if snapshot.Usage.Body == "" {
+		t.Fatal("expected cached snapshot body")
+	}
+	if snapshot.PlanType != "plus" {
+		t.Fatalf("snapshot.PlanType = %q, want %q", snapshot.PlanType, "plus")
+	}
+}
+
+func TestGetCodexQuotaWithoutSnapshotReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{
+		ID:       "codex-auth",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"account_id": "acct",
+			"plan_type":  "plus",
+		},
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	h := &Handler{authManager: manager}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	h.getCodexQuota(c, auth.EnsureIndex(), false)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	if payload["error"] != "quota snapshot unavailable" {
+		t.Fatalf("error = %v, want quota snapshot unavailable", payload["error"])
+	}
+}
 
 func TestAPICallTransportDirectBypassesGlobalProxy(t *testing.T) {
 	t.Parallel()

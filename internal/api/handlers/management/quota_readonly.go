@@ -1,14 +1,17 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -71,6 +74,7 @@ func (h *Handler) GetQuotaSnapshot(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "auth_index is required"})
 		return
 	}
+	refresh := parseBoolQuery(c.Query("refresh"))
 
 	switch provider {
 	case "antigravity":
@@ -78,7 +82,7 @@ func (h *Handler) GetQuotaSnapshot(c *gin.Context) {
 	case "claude":
 		h.getClaudeQuota(c, authIndex)
 	case "codex":
-		h.getCodexQuota(c, authIndex)
+		h.getCodexQuota(c, authIndex, refresh)
 	case "gemini-cli":
 		h.getGeminiCLIQuota(c, authIndex)
 	case "kimi":
@@ -161,14 +165,22 @@ func (h *Handler) getClaudeQuota(c *gin.Context, authIndex string) {
 	})
 }
 
-func (h *Handler) getCodexQuota(c *gin.Context, authIndex string) {
+func (h *Handler) getCodexQuota(c *gin.Context, authIndex string, refresh bool) {
 	auth := h.authByIndex(authIndex)
+	if !refresh {
+		if snapshot, ok := cachedCodexQuotaSnapshot(auth); ok {
+			c.JSON(http.StatusOK, snapshot)
+			return
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "quota snapshot unavailable"})
+		return
+	}
+
 	accountID := resolveCodexAccountID(auth)
 	if accountID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "missing codex account id"})
 		return
 	}
-
 	headers := cloneStringMap(codexQuotaHeaders)
 	headers["Chatgpt-Account-Id"] = accountID
 	resp, err := h.executeManagedRequest(c.Request.Context(), managedRequestSpec{
@@ -181,11 +193,122 @@ func (h *Handler) getCodexQuota(c *gin.Context, authIndex string) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "quota request failed"})
 		return
 	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		c.Data(resp.StatusCode, "application/json", []byte(resp.Body))
+		return
+	}
 
-	c.JSON(http.StatusOK, codexQuotaSnapshot{
+	snapshot := codexQuotaSnapshot{
 		Usage:    resp,
 		PlanType: resolveCodexPlanType(auth),
-	})
+	}
+	h.storeCodexQuotaSnapshot(c.Request.Context(), auth, snapshot)
+	c.JSON(http.StatusOK, snapshot)
+}
+
+func parseBoolQuery(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func cachedCodexQuotaSnapshot(auth *coreauth.Auth) (codexQuotaSnapshot, bool) {
+	if auth == nil {
+		return codexQuotaSnapshot{}, false
+	}
+	body, ok := coreauth.ReadCodexQuotaSnapshot(auth)
+	if !ok {
+		return codexQuotaSnapshot{}, false
+	}
+	return codexQuotaSnapshot{
+		Usage: apiCallResponse{
+			StatusCode: http.StatusOK,
+			Header:     map[string][]string{},
+			Body:       body,
+		},
+		PlanType: resolveCodexPlanType(auth),
+	}, true
+}
+
+func (h *Handler) storeCodexQuotaSnapshot(ctx context.Context, auth *coreauth.Auth, snapshot codexQuotaSnapshot) {
+	if h == nil || h.authManager == nil || auth == nil {
+		return
+	}
+	body := strings.TrimSpace(snapshot.Usage.Body)
+	if body == "" {
+		return
+	}
+	updated := auth.Clone()
+	now := time.Now().UTC()
+	coreauth.StoreCodexQuotaSnapshot(updated, body, now)
+	if resetAt, ok := extractCodexWeeklyResetAtForManagement([]byte(body), now); ok {
+		coreauth.StoreRoutingWeeklySnapshot(updated, &resetAt, now)
+	}
+	_, _ = h.authManager.Update(ctx, updated)
+}
+
+func extractCodexWeeklyResetAtForManagement(payload []byte, now time.Time) (time.Time, bool) {
+	rateLimit := firstExistingResultBytesManagement(payload, "rate_limit", "rateLimit")
+	if !rateLimit.Exists() || rateLimit.Type == gjson.Null {
+		return time.Time{}, false
+	}
+	primaryWindow := firstExistingResultManagement(rateLimit, "primary_window", "primaryWindow")
+	secondaryWindow := firstExistingResultManagement(rateLimit, "secondary_window", "secondaryWindow")
+	window := gjson.Result{}
+	if isWeeklyCodexWindowManagement(primaryWindow) {
+		window = primaryWindow
+	} else if isWeeklyCodexWindowManagement(secondaryWindow) {
+		window = secondaryWindow
+	} else if secondaryWindow.Exists() && secondaryWindow.Type != gjson.Null {
+		window = secondaryWindow
+	}
+	if !window.Exists() || window.Type == gjson.Null {
+		return time.Time{}, false
+	}
+	resetAt := firstExistingResultManagement(window, "reset_at", "resetAt")
+	if resetAt.Exists() {
+		if unix := resetAt.Int(); unix > 0 {
+			return time.Unix(unix, 0).UTC(), true
+		}
+	}
+	resetAfter := firstExistingResultManagement(window, "reset_after_seconds", "resetAfterSeconds")
+	if resetAfter.Exists() {
+		if seconds := resetAfter.Int(); seconds > 0 {
+			return now.Add(time.Duration(seconds) * time.Second), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func isWeeklyCodexWindowManagement(window gjson.Result) bool {
+	if !window.Exists() || window.Type == gjson.Null {
+		return false
+	}
+	seconds := firstExistingResultManagement(window, "limit_window_seconds", "limitWindowSeconds")
+	return seconds.Exists() && seconds.Int() == 604800
+}
+
+func firstExistingResultBytesManagement(payload []byte, paths ...string) gjson.Result {
+	for _, path := range paths {
+		result := gjson.GetBytes(payload, path)
+		if result.Exists() {
+			return result
+		}
+	}
+	return gjson.Result{}
+}
+
+func firstExistingResultManagement(parent gjson.Result, paths ...string) gjson.Result {
+	for _, path := range paths {
+		result := parent.Get(path)
+		if result.Exists() {
+			return result
+		}
+	}
+	return gjson.Result{}
 }
 
 func (h *Handler) getGeminiCLIQuota(c *gin.Context, authIndex string) {

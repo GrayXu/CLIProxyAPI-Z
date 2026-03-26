@@ -29,7 +29,7 @@ import type {
   KimiQuotaRow,
   KimiQuotaState,
 } from '@/types';
-import { apiCallApi, authFilesApi, getApiCallErrorMessage } from '@/services/api';
+import { apiCallApi, apiClient, authFilesApi, getApiCallErrorMessage } from '@/services/api';
 import { useQuotaStore } from '@/stores';
 import {
   ANTIGRAVITY_QUOTA_URLS,
@@ -38,8 +38,6 @@ import {
   CLAUDE_USAGE_URL,
   CLAUDE_REQUEST_HEADERS,
   CLAUDE_USAGE_WINDOW_KEYS,
-  CODEX_USAGE_URL,
-  CODEX_REQUEST_HEADERS,
   GEMINI_CLI_QUOTA_URL,
   GEMINI_CLI_CODE_ASSIST_URL,
   GEMINI_CLI_REQUEST_HEADERS,
@@ -56,7 +54,6 @@ import {
   parseGeminiCliQuotaPayload,
   parseGeminiCliCodeAssistPayload,
   parseKimiUsagePayload,
-  resolveCodexChatgptAccountId,
   resolveCodexPlanType,
   resolveGeminiCliProjectId,
   formatCodexResetLabel,
@@ -109,7 +106,7 @@ export interface QuotaConfig<TState, TData> {
   i18nPrefix: string;
   cardIdleMessageKey?: string;
   filterFn: (file: AuthFileItem) => boolean;
-  fetchQuota: (file: AuthFileItem, t: TFunction) => Promise<TData>;
+  fetchQuota: (file: AuthFileItem, t: TFunction, options?: { refresh?: boolean }) => Promise<TData>;
   storeSelector: (state: QuotaStore) => Record<string, TState>;
   storeSetter: keyof QuotaStore;
   buildLoadingState: () => TState;
@@ -121,6 +118,18 @@ export interface QuotaConfig<TState, TData> {
   gridClassName: string;
   renderQuotaItems: (quota: TState, t: TFunction, helpers: QuotaRenderHelpers) => ReactNode;
 }
+
+const fetchManagementQuotaSnapshot = async <T,>(
+  provider: string,
+  authIndex: string,
+  options?: { refresh?: boolean }
+): Promise<T> => {
+  const params: Record<string, string> = { auth_index: authIndex };
+  if (options?.refresh) {
+    params.refresh = 'true';
+  }
+  return apiClient.get<T>(`/quota/${provider}`, { params });
+};
 
 const resolveAntigravityProjectId = async (file: AuthFileItem): Promise<string> => {
   try {
@@ -398,7 +407,8 @@ const buildCodexQuotaWindows = (payload: CodexUsagePayload, t: TFunction): Codex
 
 const fetchCodexQuota = async (
   file: AuthFileItem,
-  t: TFunction
+  t: TFunction,
+  options?: { refresh?: boolean }
 ): Promise<{ planType: string | null; windows: CodexQuotaWindow[] }> => {
   const rawAuthIndex = file['auth_index'] ?? file.authIndex;
   const authIndex = normalizeAuthIndex(rawAuthIndex);
@@ -406,23 +416,24 @@ const fetchCodexQuota = async (
     throw new Error(t('codex_quota.missing_auth_index'));
   }
 
-  const planTypeFromFile = resolveCodexPlanType(file);
-  const accountId = resolveCodexChatgptAccountId(file);
-  if (!accountId) {
-    throw new Error(t('codex_quota.missing_account_id'));
-  }
+  const snapshot = await fetchManagementQuotaSnapshot<{
+    usage?: {
+      status_code?: number;
+      statusCode?: number;
+      body?: unknown;
+    };
+    plan_type?: string | null;
+    planType?: string | null;
+  }>('codex', authIndex, options);
 
-  const requestHeader: Record<string, string> = {
-    ...CODEX_REQUEST_HEADERS,
-    'Chatgpt-Account-Id': accountId,
+  const usage = snapshot?.usage;
+  const result = {
+    statusCode: Number(usage?.status_code ?? usage?.statusCode ?? 0),
+    header: {} as Record<string, string[]>,
+    body: usage?.body ?? null,
+    bodyText:
+      typeof usage?.body === 'string' ? usage.body : JSON.stringify(usage?.body ?? '')
   };
-
-  const result = await apiCallApi.request({
-    authIndex,
-    method: 'GET',
-    url: CODEX_USAGE_URL,
-    header: requestHeader,
-  });
 
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw createStatusError(getApiCallErrorMessage(result), result.statusCode);
@@ -435,7 +446,9 @@ const fetchCodexQuota = async (
 
   const planTypeFromUsage = normalizePlanType(payload.plan_type ?? payload.planType);
   const windows = buildCodexQuotaWindows(payload, t);
-  return { planType: planTypeFromUsage ?? planTypeFromFile, windows };
+  const planTypeFromSnapshot = normalizePlanType(snapshot?.plan_type ?? snapshot?.planType);
+  const planTypeFromFile = resolveCodexPlanType(file);
+  return { planType: planTypeFromUsage ?? planTypeFromSnapshot ?? planTypeFromFile, windows };
 };
 
 const GEMINI_CLI_G1_CREDIT_TYPE = 'GOOGLE_ONE_AI';

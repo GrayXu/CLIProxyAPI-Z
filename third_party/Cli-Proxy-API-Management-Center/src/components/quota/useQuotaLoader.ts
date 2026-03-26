@@ -10,6 +10,7 @@ import { getStatusFromError } from '@/utils/quota';
 import type { QuotaConfig } from './quotaConfigs';
 
 type QuotaScope = 'page' | 'all';
+type QuotaLoadOptions = { refresh?: boolean };
 
 type QuotaUpdater<T> = T | ((prev: T) => T);
 
@@ -37,7 +38,8 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
     async (
       targets: AuthFileItem[],
       scope: QuotaScope,
-      setLoading: (loading: boolean, scope?: QuotaScope | null) => void
+      setLoading: (loading: boolean, scope?: QuotaScope | null) => void,
+      options?: QuotaLoadOptions
     ) => {
       if (loadingRef.current) return;
       loadingRef.current = true;
@@ -58,7 +60,7 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
         const results = await Promise.all(
           targets.map(async (file): Promise<LoadQuotaResult<TData>> => {
             try {
-              const data = await config.fetchQuota(file, t);
+              const data = await config.fetchQuota(file, t, options);
               return { name: file.name, status: 'success', data };
             } catch (err: unknown) {
               const message = err instanceof Error ? err.message : t('common.unknown_error');
