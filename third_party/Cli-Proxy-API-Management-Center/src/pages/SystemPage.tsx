@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { Modal } from '@/components/ui/Modal';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { IconGithub, IconBookOpen, IconExternalLink, IconCode } from '@/components/ui/icons';
 import {
@@ -91,15 +90,12 @@ export function SystemPage() {
     type: 'success' | 'warning' | 'error' | 'muted';
     message: string;
   }>();
-  const [requestLogModalOpen, setRequestLogModalOpen] = useState(false);
   const [requestLogDraft, setRequestLogDraft] = useState(false);
   const [requestLogTouched, setRequestLogTouched] = useState(false);
   const [requestLogSaving, setRequestLogSaving] = useState(false);
   const [checkingVersion, setCheckingVersion] = useState(false);
 
   const apiKeysCache = useRef<string[]>([]);
-  const versionTapCount = useRef(0);
-  const versionTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const otherLabel = useMemo(
     () => (i18n.language?.toLowerCase().startsWith('zh') ? '其他' : 'Other'),
@@ -235,43 +231,9 @@ export function SystemPage() {
     });
   };
 
-  const openRequestLogModal = useCallback(() => {
-    setRequestLogTouched(false);
-    setRequestLogDraft(requestLogEnabled);
-    setRequestLogModalOpen(true);
-  }, [requestLogEnabled]);
-
-  const handleInfoVersionTap = useCallback(() => {
-    if (!canEditConfig) {
-      return;
-    }
-    versionTapCount.current += 1;
-    if (versionTapTimer.current) {
-      clearTimeout(versionTapTimer.current);
-    }
-
-    if (versionTapCount.current >= 7) {
-      versionTapCount.current = 0;
-      versionTapTimer.current = null;
-      openRequestLogModal();
-      return;
-    }
-
-    versionTapTimer.current = setTimeout(() => {
-      versionTapCount.current = 0;
-      versionTapTimer.current = null;
-    }, 1500);
-  }, [canEditConfig, openRequestLogModal]);
-
-  const handleRequestLogClose = useCallback(() => {
-    setRequestLogModalOpen(false);
-    setRequestLogTouched(false);
-  }, []);
-
   const handleRequestLogSave = async () => {
     if (!canEditRequestLog) return;
     if (!requestLogDirty) {
-      setRequestLogModalOpen(false);
       return;
     }
 
@@ -283,11 +245,13 @@ export function SystemPage() {
       await configApi.updateRequestLog(requestLogDraft);
       clearCache('request-log');
       showNotification(t('notification.request_log_updated'), 'success');
-      setRequestLogModalOpen(false);
+      setRequestLogTouched(false);
     } catch (error: unknown) {
       const message =
         error instanceof Error ? error.message : typeof error === 'string' ? error : '';
       updateConfigValue('request-log', previous);
+      setRequestLogDraft(previous);
+      setRequestLogTouched(false);
       showNotification(
         `${t('notification.update_failed')}${message ? `: ${message}` : ''}`,
         'error'
@@ -337,18 +301,10 @@ export function SystemPage() {
   }, [fetchConfig]);
 
   useEffect(() => {
-    if (requestLogModalOpen && !requestLogTouched) {
+    if (!requestLogTouched) {
       setRequestLogDraft(requestLogEnabled);
     }
-  }, [requestLogModalOpen, requestLogTouched, requestLogEnabled]);
-
-  useEffect(() => {
-    return () => {
-      if (versionTapTimer.current) {
-        clearTimeout(versionTapTimer.current);
-      }
-    };
-  }, []);
+  }, [requestLogTouched, requestLogEnabled]);
 
   useEffect(() => {
     if (!canViewSystemModels) {
@@ -371,25 +327,12 @@ export function SystemPage() {
           </div>
 
           <div className={styles.aboutInfoGrid}>
-            {canEditConfig ? (
-              <button
-                type="button"
-                className={`${styles.infoTile} ${styles.tapTile}`}
-                onClick={handleInfoVersionTap}
-              >
-                <div className={styles.tileHeader}>
-                  <div className={styles.tileLabel}>{t('footer.version')}</div>
-                </div>
-                <div className={styles.tileValue}>{appVersion}</div>
-              </button>
-            ) : (
-              <div className={styles.infoTile}>
-                <div className={styles.tileHeader}>
-                  <div className={styles.tileLabel}>{t('footer.version')}</div>
-                </div>
-                <div className={styles.tileValue}>{appVersion}</div>
+            <div className={styles.infoTile}>
+              <div className={styles.tileHeader}>
+                <div className={styles.tileLabel}>{t('footer.version')}</div>
               </div>
-            )}
+              <div className={styles.tileValue}>{appVersion}</div>
+            </div>
 
             <div className={styles.infoTile}>
               <div className={styles.tileHeader}>
@@ -482,6 +425,33 @@ export function SystemPage() {
           </div>
         </Card>
 
+        <Card
+          title={t('basic_settings.request_log_title')}
+          extra={
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void handleRequestLogSave()}
+              loading={requestLogSaving}
+              disabled={!canEditRequestLog || !requestLogDirty}
+            >
+              {t('common.save')}
+            </Button>
+          }
+        >
+          <p className={styles.sectionDescription}>{t('basic_settings.request_log_warning')}</p>
+          <ToggleSwitch
+            label={t('basic_settings.request_log_enable')}
+            labelPosition="left"
+            checked={requestLogDraft}
+            disabled={!canEditRequestLog || requestLogSaving}
+            onChange={(value) => {
+              setRequestLogDraft(value);
+              setRequestLogTouched(true);
+            }}
+          />
+        </Card>
+
         {canViewSystemModels && (
           <Card
             title={t('system_info.models_title')}
@@ -549,42 +519,6 @@ export function SystemPage() {
           </div>
         </Card>
       </div>
-
-      {canEditConfig && (
-        <Modal
-          open={requestLogModalOpen}
-          onClose={handleRequestLogClose}
-          title={t('basic_settings.request_log_title')}
-          footer={
-            <>
-              <Button variant="secondary" onClick={handleRequestLogClose} disabled={requestLogSaving}>
-                {t('common.cancel')}
-              </Button>
-              <Button
-                onClick={handleRequestLogSave}
-                loading={requestLogSaving}
-                disabled={!canEditRequestLog || !requestLogDirty}
-              >
-                {t('common.save')}
-              </Button>
-            </>
-          }
-        >
-          <div className="request-log-modal">
-            <div className="status-badge warning">{t('basic_settings.request_log_warning')}</div>
-            <ToggleSwitch
-              label={t('basic_settings.request_log_enable')}
-              labelPosition="left"
-              checked={requestLogDraft}
-              disabled={!canEditRequestLog || requestLogSaving}
-              onChange={(value) => {
-                setRequestLogDraft(value);
-                setRequestLogTouched(true);
-              }}
-            />
-          </div>
-        </Modal>
-      )}
     </div>
   );
 }
