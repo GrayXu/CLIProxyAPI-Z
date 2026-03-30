@@ -223,6 +223,14 @@ export function LoginPage() {
                     ariaLabel={t('language.switch')}
                   />
                 </div>
+                <a
+                  className={styles.forkLink}
+                  href="https://github.com/GrayXu/CLIProxyAPI-Z"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  GrayXu/CLIProxyAPI-Z
+                </a>
                 <div className={styles.subtitle}>{t('login.subtitle')}</div>
               </div>
 

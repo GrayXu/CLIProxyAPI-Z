@@ -161,6 +161,18 @@
   color: var(--text-primary);
 }
 
+.forkLink {
+  width: fit-content;
+  align-self: center;
+  color: $primary-color;
+  font-size: 13px;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
 // 副标题
 .subtitle {
   color: var(--text-secondary);
