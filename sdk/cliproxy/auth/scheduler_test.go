@@ -364,6 +364,162 @@ func TestSchedulerPick_CodexQuotaSmartUsesWeeklyUrgencyThenFiveHourSmoothing(t *
 	}
 }
 
+func TestSchedulerPick_CodexQuotaSmartPrefersPaidPlanOverFreeWhenWeeklyWindowsMatch(t *testing.T) {
+	now := time.Now().UTC()
+	free := &Auth{
+		ID:       "codex-free",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"plan_type": "free",
+		},
+		Metadata: map[string]any{"account_id": "acct-free"},
+	}
+	StoreCodexQuotaSmartState(free, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.2),
+				ResetAt:           now.Add(2 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.9),
+			ResetAt:           now.Add(45 * time.Minute).Format(time.RFC3339),
+		},
+	})
+
+	team := &Auth{
+		ID:       "codex-team",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"plan_type": "team",
+		},
+		Metadata: map[string]any{"account_id": "acct-team"},
+	}
+	StoreCodexQuotaSmartState(team, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.2),
+				ResetAt:           now.Add(2 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.2),
+			ResetAt:           now.Add(45 * time.Minute).Format(time.RFC3339),
+		},
+	})
+
+	plus := &Auth{
+		ID:       "codex-plus",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"plan_type": "plus",
+		},
+		Metadata: map[string]any{"account_id": "acct-plus"},
+	}
+	StoreCodexQuotaSmartState(plus, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.19),
+				ResetAt:           now.Add(2 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.1),
+			ResetAt:           now.Add(45 * time.Minute).Format(time.RFC3339),
+		},
+	})
+
+	scheduler := newSchedulerForTest(&CodexQuotaSmartSelector{}, free, team, plus)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != team.ID {
+		t.Fatalf("pickSingle() auth = %v, want %s", got, team.ID)
+	}
+}
+
+func TestSchedulerPick_CodexQuotaSmartCandidatePoolUsesWeightedWeeklyUrgency(t *testing.T) {
+	now := time.Now().UTC()
+	freeTop := &Auth{
+		ID:       "codex-free-top",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"plan_type": "free",
+		},
+		Metadata: map[string]any{"account_id": "acct-free-top"},
+	}
+	StoreCodexQuotaSmartState(freeTop, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.45),
+				ResetAt:           now.Add(1 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.2),
+			ResetAt:           now.Add(50 * time.Minute).Format(time.RFC3339),
+		},
+	})
+
+	teamPoolTop := &Auth{
+		ID:       "codex-team-pool-top",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"plan_type": "team",
+		},
+		Metadata: map[string]any{"account_id": "acct-team-pool-top"},
+	}
+	StoreCodexQuotaSmartState(teamPoolTop, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.10),
+				ResetAt:           now.Add(1 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.1),
+			ResetAt:           now.Add(50 * time.Minute).Format(time.RFC3339),
+		},
+	})
+
+	teamPoolWinner := &Auth{
+		ID:       "codex-team-pool-winner",
+		Provider: "codex",
+		Attributes: map[string]string{
+			"plan_type": "plus",
+		},
+		Metadata: map[string]any{"account_id": "acct-team-pool-winner"},
+	}
+	StoreCodexQuotaSmartState(teamPoolWinner, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.092),
+				ResetAt:           now.Add(1 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.95),
+			ResetAt:           now.Add(50 * time.Minute).Format(time.RFC3339),
+		},
+	})
+
+	scheduler := newSchedulerForTest(&CodexQuotaSmartSelector{}, freeTop, teamPoolTop, teamPoolWinner)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != teamPoolWinner.ID {
+		t.Fatalf("pickSingle() auth = %v, want %s", got, teamPoolWinner.ID)
+	}
+}
+
 func floatPtr(v float64) *float64 {
 	return &v
 }

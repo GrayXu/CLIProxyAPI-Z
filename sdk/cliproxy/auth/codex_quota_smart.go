@@ -23,6 +23,8 @@ const (
 	codexSmartCandidatePoolMin        = 2
 	codexSmartCandidatePoolMax        = 4
 	codexSmartCandidatePoolRatio      = 0.90
+	codexSmartDefaultPlanWeight       = 1.0
+	codexSmartPaidPlanWeight          = 5.0
 )
 
 // CodexQuotaSmartSelector prioritizes Codex auths using weekly urgency first
@@ -57,6 +59,8 @@ type codexQuotaSmartWindowSnapshot struct {
 type codexQuotaSmartCandidate struct {
 	entry             *scheduledAuth
 	state             codexQuotaSmartState
+	planType          string
+	planWeight        float64
 	snapshotAt        time.Time
 	lastPrewarmAt     time.Time
 	weeklyResetAt     time.Time
@@ -121,6 +125,7 @@ func ReadCodexQuotaSmartState(auth *Auth, now time.Time) (codexQuotaSmartState, 
 	}
 
 	state.Local5HEvents = pruneCodexSmartLocalEvents(state.Local5HEvents, now)
+	state.PlanType = codexQuotaSmartResolvePlanType(auth, state)
 	return state, true
 }
 
@@ -151,6 +156,7 @@ func UpdateCodexQuotaSmartStateFromSnapshot(auth *Auth, payload string, snapshot
 	if planType != "" {
 		state.PlanType = planType
 	}
+	state.PlanType = codexQuotaSmartResolvePlanType(auth, state)
 
 	state.FiveHour.RemainingFraction = fiveHour.RemainingFraction
 	if fiveHour.ResetAt.IsZero() {
@@ -250,6 +256,8 @@ func codexQuotaSmartCandidateState(entry *scheduledAuth, now time.Time) codexQuo
 	}
 	state, _ := ReadCodexQuotaSmartState(entry.auth, now)
 	candidate.state = state
+	candidate.planType = state.PlanType
+	candidate.planWeight = codexQuotaSmartPlanWeight(candidate.planType)
 	candidate.localEventCount = len(state.Local5HEvents)
 	candidate.prewarmEligible = codexQuotaSmartShouldPrewarm(entry.auth, now)
 	candidate.snapshotAt, _ = parseTimeValue(state.SnapshotAt)
@@ -257,7 +265,7 @@ func codexQuotaSmartCandidateState(entry *scheduledAuth, now time.Time) codexQuo
 	candidate.weeklyResetAt, _ = parseTimeValue(state.Weekly.ResetAt)
 	candidate.fiveHourResetAt, _ = parseTimeValue(state.FiveHour.ResetAt)
 	candidate.fiveHourRemaining, candidate.hasFiveHour = codexQuotaSmartRemainingValue(state.FiveHour.RemainingFraction)
-	candidate.weeklyUrgency, candidate.hasWeeklyUrgency = codexQuotaSmartWeeklyUrgency(state, now)
+	candidate.weeklyUrgency, candidate.hasWeeklyUrgency = codexQuotaSmartWeeklyUrgency(state, candidate.planWeight, now)
 	return candidate
 }
 
@@ -447,7 +455,7 @@ func codexQuotaSmartRemainingValue(value *float64) (float64, bool) {
 	return *value, true
 }
 
-func codexQuotaSmartWeeklyUrgency(state codexQuotaSmartState, now time.Time) (float64, bool) {
+func codexQuotaSmartWeeklyUrgency(state codexQuotaSmartState, planWeight float64, now time.Time) (float64, bool) {
 	if !state.Weekly.Started {
 		return 0, false
 	}
@@ -463,7 +471,77 @@ func codexQuotaSmartWeeklyUrgency(state codexQuotaSmartState, now time.Time) (fl
 	if hours <= 0 {
 		hours = 1.0 / 60.0
 	}
-	return remaining / hours, true
+	if planWeight <= 0 {
+		planWeight = codexSmartDefaultPlanWeight
+	}
+	return remaining * planWeight / hours, true
+}
+
+func codexQuotaSmartResolvePlanType(auth *Auth, state codexQuotaSmartState) string {
+	if planType := codexQuotaSmartNormalizePlanType(state.PlanType); planType != "" {
+		return planType
+	}
+	if auth == nil {
+		return ""
+	}
+	if auth.Attributes != nil {
+		if planType := codexQuotaSmartNormalizePlanType(auth.Attributes["plan_type"]); planType != "" {
+			return planType
+		}
+	}
+	if auth.Metadata != nil {
+		if planType := codexQuotaSmartNormalizePlanType(stringFromMetadataMap(auth.Metadata, "plan_type", "planType")); planType != "" {
+			return planType
+		}
+	}
+	return ""
+}
+
+func codexQuotaSmartPlanWeight(planType string) float64 {
+	switch codexQuotaSmartNormalizePlanType(planType) {
+	case "team", "plus", "pro":
+		return codexSmartPaidPlanWeight
+	default:
+		return codexSmartDefaultPlanWeight
+	}
+}
+
+func codexQuotaSmartNormalizePlanType(raw string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	switch trimmed {
+	case "plus", "pro", "team", "free":
+		return trimmed
+	case "plan_plus":
+		return "plus"
+	case "plan_pro":
+		return "pro"
+	case "plan_team":
+		return "team"
+	case "plan_free":
+		return "free"
+	default:
+		return trimmed
+	}
+}
+
+func stringFromMetadataMap(metadata map[string]any, keys ...string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	for _, key := range keys {
+		value, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			continue
+		}
+		if trimmed := strings.TrimSpace(text); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func extractCodexQuotaSmartSnapshot(payload []byte, now time.Time) (codexQuotaSmartWindowSnapshot, codexQuotaSmartWindowSnapshot, string) {
