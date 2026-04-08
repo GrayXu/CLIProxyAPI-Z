@@ -208,3 +208,34 @@ func TestDefaultRequestLoggerFactory_UsesResolvedLogDirectory(t *testing.T) {
 		}
 	}
 }
+
+func TestNewServerTrustsOnlyLocalReverseProxy(t *testing.T) {
+	server := newTestServer(t)
+	server.engine.GET("/debug/client-ip", func(c *gin.Context) {
+		c.String(http.StatusOK, c.ClientIP())
+	})
+
+	remoteReq := httptest.NewRequest(http.MethodGet, "/debug/client-ip", nil)
+	remoteReq.RemoteAddr = "198.51.100.10:12345"
+	remoteReq.Header.Set("X-Forwarded-For", "203.0.113.20")
+	remoteResp := httptest.NewRecorder()
+	server.engine.ServeHTTP(remoteResp, remoteReq)
+	if remoteResp.Code != http.StatusOK {
+		t.Fatalf("remote status = %d, want %d", remoteResp.Code, http.StatusOK)
+	}
+	if got := strings.TrimSpace(remoteResp.Body.String()); got != "198.51.100.10" {
+		t.Fatalf("remote client ip = %q, want %q", got, "198.51.100.10")
+	}
+
+	localReq := httptest.NewRequest(http.MethodGet, "/debug/client-ip", nil)
+	localReq.RemoteAddr = "127.0.0.1:12345"
+	localReq.Header.Set("X-Forwarded-For", "203.0.113.20")
+	localResp := httptest.NewRecorder()
+	server.engine.ServeHTTP(localResp, localReq)
+	if localResp.Code != http.StatusOK {
+		t.Fatalf("local status = %d, want %d", localResp.Code, http.StatusOK)
+	}
+	if got := strings.TrimSpace(localResp.Body.String()); got != "203.0.113.20" {
+		t.Fatalf("local client ip = %q, want %q", got, "203.0.113.20")
+	}
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	"gopkg.in/yaml.v3"
 )
 
 type attemptInfo struct {
@@ -30,6 +31,10 @@ const attemptCleanupInterval = 1 * time.Hour
 
 // attemptMaxIdleTime controls how long an IP can be idle before cleanup
 const attemptMaxIdleTime = 2 * time.Hour
+
+const managementMaxFailures = 3
+
+const managementBanDuration = 30 * time.Minute
 
 // Handler aggregates config reference, persistence path and helpers.
 type Handler struct {
@@ -46,6 +51,7 @@ type Handler struct {
 	envSecret           string
 	logDir              string
 	postAuthHook        coreauth.PostAuthHook
+	configUpdatedHook   func(*config.Config)
 }
 
 // NewHandler creates a new management handler instance.
@@ -132,20 +138,22 @@ func (h *Handler) SetPostAuthHook(hook coreauth.PostAuthHook) {
 	h.postAuthHook = hook
 }
 
+// SetConfigUpdatedHook registers a hook that runs after config is durably written.
+func (h *Handler) SetConfigUpdatedHook(hook func(*config.Config)) {
+	h.configUpdatedHook = hook
+}
+
 // Middleware enforces access control for management endpoints.
 // All requests (local and remote) require a valid management key.
 // Additionally, remote access requires allow-remote-management=true.
 func (h *Handler) Middleware() gin.HandlerFunc {
-	const maxFailures = 5
-	const banDuration = 30 * time.Minute
-
 	return func(c *gin.Context) {
 		c.Header("X-CPA-VERSION", buildinfo.Version)
 		c.Header("X-CPA-COMMIT", buildinfo.Commit)
 		c.Header("X-CPA-BUILD-DATE", buildinfo.BuildDate)
 
 		clientIP := c.ClientIP()
-		localClient := clientIP == "127.0.0.1" || clientIP == "::1"
+		localClient := isLoopbackClient(clientIP)
 		cfg := h.cfg
 		var (
 			allowRemote bool
@@ -162,22 +170,10 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 
 		fail := func() {}
 		if !localClient {
-			h.attemptsMu.Lock()
-			ai := h.failedAttempts[clientIP]
-			if ai != nil {
-				if !ai.blockedUntil.IsZero() {
-					if time.Now().Before(ai.blockedUntil) {
-						remaining := time.Until(ai.blockedUntil).Round(time.Second)
-						h.attemptsMu.Unlock()
-						c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("IP banned due to too many failed attempts. Try again in %s", remaining)})
-						return
-					}
-					// Ban expired, reset state
-					ai.blockedUntil = time.Time{}
-					ai.count = 0
-				}
+			if remaining, blocked := h.blockedForClient(clientIP); blocked {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("IP banned due to too many failed attempts. Try again in %s", remaining)})
+				return
 			}
-			h.attemptsMu.Unlock()
 
 			if !allowRemote {
 				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "remote management disabled"})
@@ -185,19 +181,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 			}
 
 			fail = func() {
-				h.attemptsMu.Lock()
-				aip := h.failedAttempts[clientIP]
-				if aip == nil {
-					aip = &attemptInfo{}
-					h.failedAttempts[clientIP] = aip
-				}
-				aip.count++
-				aip.lastActivity = time.Now()
-				if aip.count >= maxFailures {
-					aip.blockedUntil = time.Now().Add(banDuration)
-					aip.count = 0
-				}
-				h.attemptsMu.Unlock()
+				h.recordFailedAttempt(clientIP)
 			}
 		}
 		if secretHash == "" && envSecret == "" && strings.TrimSpace(h.localPassword) == "" && !h.hasViewerManagementKeys() {
@@ -230,12 +214,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 		currentRole := h.resolveRoleForKey(provided, secretHash, envSecret, localClient)
 		if currentRole == roleAdmin {
 			if !localClient {
-				h.attemptsMu.Lock()
-				if ai := h.failedAttempts[clientIP]; ai != nil {
-					ai.count = 0
-					ai.blockedUntil = time.Time{}
-				}
-				h.attemptsMu.Unlock()
+				h.clearFailedAttempts(clientIP)
 			}
 			h.setRoleContext(c, roleAdmin)
 			c.Next()
@@ -244,12 +223,7 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 
 		if currentRole == roleViewer {
 			if !localClient {
-				h.attemptsMu.Lock()
-				if ai := h.failedAttempts[clientIP]; ai != nil {
-					ai.count = 0
-					ai.blockedUntil = time.Time{}
-				}
-				h.attemptsMu.Unlock()
+				h.clearFailedAttempts(clientIP)
 			}
 			h.setRoleContext(c, roleViewer)
 			c.Next()
@@ -266,14 +240,81 @@ func (h *Handler) Middleware() gin.HandlerFunc {
 	}
 }
 
+func isLoopbackClient(clientIP string) bool {
+	return clientIP == "127.0.0.1" || clientIP == "::1"
+}
+
+func (h *Handler) blockedForClient(clientIP string) (time.Duration, bool) {
+	h.attemptsMu.Lock()
+	defer h.attemptsMu.Unlock()
+	ai := h.failedAttempts[clientIP]
+	if ai == nil || ai.blockedUntil.IsZero() {
+		return 0, false
+	}
+	if time.Now().Before(ai.blockedUntil) {
+		return time.Until(ai.blockedUntil).Round(time.Second), true
+	}
+	ai.blockedUntil = time.Time{}
+	ai.count = 0
+	return 0, false
+}
+
+func (h *Handler) recordFailedAttempt(clientIP string) {
+	h.attemptsMu.Lock()
+	defer h.attemptsMu.Unlock()
+	aip := h.failedAttempts[clientIP]
+	if aip == nil {
+		aip = &attemptInfo{}
+		h.failedAttempts[clientIP] = aip
+	}
+	aip.count++
+	aip.lastActivity = time.Now()
+	if aip.count >= managementMaxFailures {
+		aip.blockedUntil = time.Now().Add(managementBanDuration)
+		aip.count = 0
+	}
+}
+
+func (h *Handler) clearFailedAttempts(clientIP string) {
+	h.attemptsMu.Lock()
+	defer h.attemptsMu.Unlock()
+	if ai := h.failedAttempts[clientIP]; ai != nil {
+		ai.count = 0
+		ai.blockedUntil = time.Time{}
+		ai.lastActivity = time.Now()
+	}
+}
+
+func cloneConfigSnapshot(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+	raw, err := yaml.Marshal(cfg)
+	if err != nil {
+		return cfg
+	}
+	var out config.Config
+	if err := yaml.Unmarshal(raw, &out); err != nil {
+		return cfg
+	}
+	return &out
+}
+
 // persist saves the current in-memory config to disk.
 func (h *Handler) persist(c *gin.Context) bool {
+	var snapshot *config.Config
+	hook := h.configUpdatedHook
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	// Preserve comments when writing
 	if err := config.SaveConfigPreserveComments(h.configFilePath, h.cfg); err != nil {
+		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save config: %v", err)})
 		return false
+	}
+	snapshot = cloneConfigSnapshot(h.cfg)
+	h.mu.Unlock()
+	if hook != nil && snapshot != nil {
+		hook(snapshot)
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	return true

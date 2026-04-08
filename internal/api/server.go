@@ -191,6 +191,10 @@ func hasViewerManagementKey(cfg *config.Config) bool {
 	return false
 }
 
+func hasManagementPublicIssuance(cfg *config.Config) bool {
+	return cfg != nil && strings.TrimSpace(cfg.RemoteManagement.IssueAPIKeyPassword) != ""
+}
+
 // NewServer creates and initializes a new API server instance.
 // It sets up the Gin engine, middleware, routes, and handlers.
 //
@@ -215,6 +219,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 
 	// Create gin engine
 	engine := gin.New()
+	if errTrusted := engine.SetTrustedProxies([]string{"127.0.0.1", "::1"}); errTrusted != nil {
+		log.Errorf("failed to configure trusted proxies: %v", errTrusted)
+	}
 	if optionState.engineConfigurator != nil {
 		optionState.engineConfigurator(engine)
 	}
@@ -284,6 +291,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	if optionState.postAuthHook != nil {
 		s.mgmt.SetPostAuthHook(optionState.postAuthHook)
 	}
+	s.mgmt.SetConfigUpdatedHook(s.UpdateClients)
 	s.localPassword = optionState.localPassword
 
 	// Setup routes
@@ -308,7 +316,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 
 	// Register management routes when configuration or environment secrets are available,
 	// or when a local management password is provided (e.g. TUI mode).
-	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || s.localPassword != "" || hasViewerManagementKey(cfg)
+	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || s.localPassword != "" || hasViewerManagementKey(cfg) || hasManagementPublicIssuance(cfg)
 	s.managementRoutesEnabled.Store(hasManagementSecret)
 	if hasManagementSecret {
 		s.registerManagementRoutes()
@@ -497,17 +505,21 @@ func (s *Server) registerManagementRoutes() {
 	log.Info("management routes registered after secret key configuration")
 
 	mgmt := s.engine.Group("/v0/management")
-	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
-	admin := mgmt.Group("")
+	mgmt.Use(s.managementAvailabilityMiddleware())
+	mgmt.POST("/public/issue-api-key", s.mgmt.IssueAPIKey)
+
+	protected := mgmt.Group("")
+	protected.Use(s.mgmt.Middleware())
+	admin := protected.Group("")
 	admin.Use(s.mgmt.RequireAdmin())
 	{
-		mgmt.GET("/session", s.mgmt.GetSession)
-		mgmt.GET("/usage", s.mgmt.GetUsageStatistics)
-		mgmt.GET("/config", s.mgmt.GetConfig)
-		mgmt.GET("/latest-version", s.mgmt.GetLatestVersion)
-		mgmt.GET("/logs", s.mgmt.GetLogs)
-		mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
-		mgmt.GET("/quota/:provider", s.mgmt.GetQuotaSnapshot)
+		protected.GET("/session", s.mgmt.GetSession)
+		protected.GET("/usage", s.mgmt.GetUsageStatistics)
+		protected.GET("/config", s.mgmt.GetConfig)
+		protected.GET("/latest-version", s.mgmt.GetLatestVersion)
+		protected.GET("/logs", s.mgmt.GetLogs)
+		protected.GET("/auth-files", s.mgmt.ListAuthFiles)
+		protected.GET("/quota/:provider", s.mgmt.GetQuotaSnapshot)
 
 		admin.GET("/usage/export", s.mgmt.ExportUsageStatistics)
 		admin.POST("/usage/import", s.mgmt.ImportUsageStatistics)
@@ -954,9 +966,9 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 
 	prevRoutesEnabled := false
 	if oldCfg != nil {
-		prevRoutesEnabled = oldCfg.RemoteManagement.SecretKey != "" || hasViewerManagementKey(oldCfg)
+		prevRoutesEnabled = oldCfg.RemoteManagement.SecretKey != "" || hasViewerManagementKey(oldCfg) || hasManagementPublicIssuance(oldCfg)
 	}
-	newRoutesEnabled := cfg.RemoteManagement.SecretKey != "" || hasViewerManagementKey(cfg)
+	newRoutesEnabled := cfg.RemoteManagement.SecretKey != "" || hasViewerManagementKey(cfg) || hasManagementPublicIssuance(cfg)
 	if s.envManagementSecret {
 		s.registerManagementRoutes()
 		if s.managementRoutesEnabled.CompareAndSwap(false, true) {

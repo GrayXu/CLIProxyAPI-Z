@@ -22,6 +22,7 @@ func TestBuildConfigChangeDetails(t *testing.T) {
 		RemoteManagement: config.RemoteManagement{
 			AllowRemote:            false,
 			SecretKey:              "old",
+			IssueAPIKeyPassword:    "",
 			DisableControlPanel:    false,
 			DisableAutoUpdatePanel: false,
 			PanelGitHubRepository:  "repo-old",
@@ -57,6 +58,7 @@ func TestBuildConfigChangeDetails(t *testing.T) {
 		RemoteManagement: config.RemoteManagement{
 			AllowRemote:            true,
 			SecretKey:              "new",
+			IssueAPIKeyPassword:    "issue-new",
 			DisableControlPanel:    true,
 			DisableAutoUpdatePanel: true,
 			PanelGitHubRepository:  "repo-new",
@@ -92,6 +94,7 @@ func TestBuildConfigChangeDetails(t *testing.T) {
 	expectContains(t, details, "remote-management.allow-remote: false -> true")
 	expectContains(t, details, "remote-management.disable-auto-update-panel: false -> true")
 	expectContains(t, details, "remote-management.secret-key: updated")
+	expectContains(t, details, "remote-management.issue-api-key-password: created")
 	expectContains(t, details, "oauth-excluded-models[providera]: updated (1 -> 2 entries)")
 	expectContains(t, details, "oauth-excluded-models[providerb]: added (1 entries)")
 	expectContains(t, details, "openai-compatibility:")
@@ -207,7 +210,8 @@ func TestBuildConfigChangeDetails_SecretsAndCounts(t *testing.T) {
 			UpstreamAPIKey: "new-key",
 		},
 		RemoteManagement: config.RemoteManagement{
-			SecretKey: "new-secret",
+			SecretKey:           "new-secret",
+			IssueAPIKeyPassword: "issue-secret",
 		},
 	}
 
@@ -215,6 +219,7 @@ func TestBuildConfigChangeDetails_SecretsAndCounts(t *testing.T) {
 	expectContains(t, details, "api-keys count: 1 -> 3")
 	expectContains(t, details, "ampcode.upstream-api-key: added")
 	expectContains(t, details, "remote-management.secret-key: created")
+	expectContains(t, details, "remote-management.issue-api-key-password: created")
 }
 
 func TestBuildConfigChangeDetails_FlagsAndKeys(t *testing.T) {

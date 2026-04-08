@@ -225,6 +225,32 @@
   font-weight: 500;
 }
 
+.divider {
+  position: relative;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: calc(50% - 44px);
+    border-top: 1px solid var(--border-color);
+  }
+
+  &::before {
+    left: 0;
+  }
+
+  &::after {
+    right: 0;
+  }
+}
+
 // 错误提示框
 .errorBox {
   background: rgba($error-color, 0.1);
@@ -233,6 +259,58 @@
   padding: $spacing-sm $spacing-md;
   color: $error-color;
   font-size: 14px;
+}
+
+.issueResultBody {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+}
+
+.issueResultDescription {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.issueResultField {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-xs;
+}
+
+.issueResultLabel {
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.issueResultValue,
+.issueResultMeta {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  padding: $spacing-sm $spacing-md;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.issueResultValue {
+  font-size: 13px;
+}
+
+.issueResultMeta {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.issueResultFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: $spacing-sm;
 }
 
 // ========== 启动动画（右侧） ==========

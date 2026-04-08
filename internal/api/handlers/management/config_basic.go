@@ -163,6 +163,9 @@ func (h *Handler) PutConfigYAML(c *gin.Context) {
 		return
 	}
 	h.cfg = newCfg
+	if hook := h.configUpdatedHook; hook != nil {
+		hook(cloneConfigSnapshot(newCfg))
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "changed": []string{"config"}})
 }
 

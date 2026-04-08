@@ -3,6 +3,15 @@
  * 基于原项目 src/modules/login.js 和 src/core/connection.js
  */
 
+export interface IssueApiKeyRequest {
+  password: string;
+}
+
+export interface IssueApiKeyResponse {
+  api_key: string;
+  role: 'viewer';
+}
+
 // 登录凭据
 export interface LoginCredentials {
   apiBase: string;

@@ -196,6 +196,9 @@ type RemoteManagement struct {
 	AllowRemote bool `yaml:"allow-remote"`
 	// SecretKey is the management key (plaintext or bcrypt hashed). YAML key intentionally 'secret-key'.
 	SecretKey string `yaml:"secret-key"`
+	// IssueAPIKeyPassword is the special password used to mint a new viewer/model API key.
+	// Accepts plaintext or bcrypt hash. YAML key intentionally 'issue-api-key-password'.
+	IssueAPIKeyPassword string `yaml:"issue-api-key-password"`
 	// DisableControlPanel skips serving and syncing the bundled management UI when true.
 	DisableControlPanel bool `yaml:"disable-control-panel"`
 	// DisableAutoUpdatePanel disables automatic periodic background updates of the management panel asset from GitHub.
@@ -631,6 +634,14 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 		// Persist the hashed value back to the config file to avoid re-hashing on next startup.
 		// Preserve YAML comments and ordering; update only the nested key.
 		_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"remote-management", "secret-key"}, hashed)
+	}
+	if cfg.RemoteManagement.IssueAPIKeyPassword != "" && !looksLikeBcrypt(cfg.RemoteManagement.IssueAPIKeyPassword) {
+		hashed, errHash := hashSecret(cfg.RemoteManagement.IssueAPIKeyPassword)
+		if errHash != nil {
+			return nil, fmt.Errorf("failed to hash remote management issue-api-key password: %w", errHash)
+		}
+		cfg.RemoteManagement.IssueAPIKeyPassword = hashed
+		_ = SaveConfigPreserveCommentsUpdateNestedScalar(configFile, []string{"remote-management", "issue-api-key-password"}, hashed)
 	}
 
 	cfg.RemoteManagement.PanelGitHubRepository = strings.TrimSpace(cfg.RemoteManagement.PanelGitHubRepository)

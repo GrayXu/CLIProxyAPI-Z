@@ -1,17 +1,21 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import axios from 'axios';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Modal } from '@/components/ui/Modal';
 import { Select } from '@/components/ui/Select';
 import { SelectionCheckbox } from '@/components/ui/SelectionCheckbox';
 import { IconEye, IconEyeOff } from '@/components/ui/icons';
 import { useAuthStore, useLanguageStore, useNotificationStore } from '@/stores';
+import { issueApiKeyApi } from '@/services/api';
 import { detectApiBaseFromLocation, normalizeApiBase } from '@/utils/connection';
 import { LANGUAGE_LABEL_KEYS, LANGUAGE_ORDER } from '@/utils/constants';
 import { isSupportedLanguage } from '@/utils/language';
+import { copyToClipboard } from '@/utils/clipboard';
 import { INLINE_LOGO_JPEG } from '@/assets/logoInline';
-import type { ApiError } from '@/types';
+import type { ApiError, IssueApiKeyResponse } from '@/types';
 import styles from './LoginPage.module.scss';
 
 /**
@@ -19,18 +23,37 @@ import styles from './LoginPage.module.scss';
  */
 type RedirectState = { from?: { pathname?: string } };
 
+const ISSUE_LOGIN_RETRY_DELAYS_MS = [0, 200, 400, 800, 1200, 1600];
+
+const wait = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
 function getLocalizedErrorMessage(error: unknown, t: (key: string) => string): string {
-  const apiError = error as Partial<ApiError>;
-  const status = typeof apiError.status === 'number' ? apiError.status : undefined;
-  const code = typeof apiError.code === 'string' ? apiError.code : undefined;
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof apiError.message === 'string'
-        ? apiError.message
-        : typeof error === 'string'
-          ? error
-          : '';
+  let status: number | undefined;
+  let code: string | undefined;
+  let message = '';
+
+  if (axios.isAxiosError(error)) {
+    status = error.response?.status;
+    code = error.code;
+    message =
+      typeof error.response?.data?.error === 'string'
+        ? error.response.data.error
+        : typeof error.response?.data?.message === 'string'
+          ? error.response.data.message
+          : error.message;
+  } else {
+    const apiError = error as Partial<ApiError>;
+    status = typeof apiError.status === 'number' ? apiError.status : undefined;
+    code = typeof apiError.code === 'string' ? apiError.code : undefined;
+    message =
+      error instanceof Error
+        ? error.message
+        : typeof apiError.message === 'string'
+          ? apiError.message
+          : typeof error === 'string'
+            ? error
+            : '';
+  }
 
   // 根据 HTTP 状态码判断
   if (status === 401) {
@@ -82,13 +105,18 @@ export function LoginPage() {
 
   const [apiBase, setApiBase] = useState('');
   const [managementKey, setManagementKey] = useState('');
+  const [issuePassword, setIssuePassword] = useState('');
   const [showCustomBase, setShowCustomBase] = useState(false);
   const [showKey, setShowKey] = useState(false);
+  const [showIssuePassword, setShowIssuePassword] = useState(false);
   const [rememberPassword, setRememberPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [issueLoading, setIssueLoading] = useState(false);
+  const [issueConfirmLoading, setIssueConfirmLoading] = useState(false);
   const [autoLoading, setAutoLoading] = useState(true);
   const [autoLoginSuccess, setAutoLoginSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [issuedKeyResult, setIssuedKeyResult] = useState<IssueApiKeyResponse | null>(null);
 
   const detectedBase = useMemo(() => detectApiBaseFromLocation(), []);
   const languageOptions = useMemo(
@@ -136,6 +164,32 @@ export function LoginPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const finalizeLogin = useCallback(
+    async (baseToUse: string, key: string, enableRetry: boolean) => {
+      const delays = enableRetry ? ISSUE_LOGIN_RETRY_DELAYS_MS : [0];
+      let lastError: unknown = null;
+
+      for (const delayMs of delays) {
+        if (delayMs > 0) {
+          await wait(delayMs);
+        }
+        try {
+          await login({
+            apiBase: baseToUse,
+            managementKey: key,
+            rememberPassword
+          });
+          return;
+        } catch (err: unknown) {
+          lastError = err;
+        }
+      }
+
+      throw lastError;
+    },
+    [login, rememberPassword]
+  );
+
   const handleSubmit = useCallback(async () => {
     if (!managementKey.trim()) {
       setError(t('login.error_required'));
@@ -146,11 +200,7 @@ export function LoginPage() {
     setLoading(true);
     setError('');
     try {
-      await login({
-        apiBase: baseToUse,
-        managementKey: managementKey.trim(),
-        rememberPassword
-      });
+      await finalizeLogin(baseToUse, managementKey.trim(), false);
       showNotification(t('common.connected_status'), 'success');
       navigate('/', { replace: true });
     } catch (err: unknown) {
@@ -160,7 +210,73 @@ export function LoginPage() {
     } finally {
       setLoading(false);
     }
-  }, [apiBase, detectedBase, login, managementKey, navigate, rememberPassword, showNotification, t]);
+  }, [apiBase, detectedBase, finalizeLogin, managementKey, navigate, showNotification, t]);
+
+  const handleIssueAndLogin = useCallback(async () => {
+    if (!issuePassword.trim()) {
+      setError(t('login.issue_password_required'));
+      return;
+    }
+
+    const baseToUse = apiBase ? normalizeApiBase(apiBase) : detectedBase;
+    setIssueLoading(true);
+    setError('');
+    try {
+      const issued = await issueApiKeyApi.issue(baseToUse, { password: issuePassword.trim() });
+      setManagementKey(issued.api_key);
+      setIssuedKeyResult(issued);
+      showNotification(t('login.issue_success'), 'success');
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error && err.message === t('login.issue_login_pending')
+          ? err.message
+          : getLocalizedErrorMessage(err, t);
+      setError(message);
+      showNotification(`${t('notification.login_failed')}: ${message}`, 'error');
+    } finally {
+      setIssueLoading(false);
+    }
+  }, [apiBase, detectedBase, issuePassword, showNotification, t]);
+
+  const handleConfirmIssuedKey = useCallback(async () => {
+    if (!issuedKeyResult) {
+      return;
+    }
+    const baseToUse = apiBase ? normalizeApiBase(apiBase) : detectedBase;
+    setIssueConfirmLoading(true);
+    setError('');
+    try {
+      try {
+        await finalizeLogin(baseToUse, issuedKeyResult.api_key, true);
+      } catch {
+        throw new Error(t('login.issue_login_pending'));
+      }
+      setIssuedKeyResult(null);
+      navigate('/', { replace: true });
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error && err.message === t('login.issue_login_pending')
+          ? err.message
+          : getLocalizedErrorMessage(err, t);
+      setError(message);
+      showNotification(`${t('notification.login_failed')}: ${message}`, 'error');
+    } finally {
+      setIssueConfirmLoading(false);
+    }
+  }, [apiBase, detectedBase, finalizeLogin, issuedKeyResult, navigate, showNotification, t]);
+
+  const handleCopyIssuedKey = useCallback(async () => {
+    if (!issuedKeyResult?.api_key) {
+      return;
+    }
+    const copied = await copyToClipboard(issuedKeyResult.api_key);
+    showNotification(
+      copied
+        ? t('notification.link_copied', { defaultValue: 'Copied to clipboard' })
+        : t('notification.copy_failed', { defaultValue: 'Copy failed' }),
+      copied ? 'success' : 'error'
+    );
+  }, [issuedKeyResult, showNotification, t]);
 
   const handleSubmitKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
@@ -170,6 +286,16 @@ export function LoginPage() {
       }
     },
     [loading, handleSubmit]
+  );
+
+  const handleIssueKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (event.key === 'Enter' && !issueLoading) {
+        event.preventDefault();
+        handleIssueAndLogin();
+      }
+    },
+    [handleIssueAndLogin, issueLoading]
   );
 
   if (isAuthenticated && !autoLoading && !autoLoginSuccess) {
@@ -289,6 +415,37 @@ export function LoginPage() {
                 }
               />
 
+              <div className={styles.divider}>{t('login.issue_section_divider')}</div>
+
+              <Input
+                label={t('login.issue_password_label')}
+                placeholder={t('login.issue_password_placeholder')}
+                hint={t('login.issue_password_hint')}
+                type={showIssuePassword ? 'text' : 'password'}
+                value={issuePassword}
+                onChange={(e) => setIssuePassword(e.target.value)}
+                onKeyDown={handleIssueKeyDown}
+                rightElement={
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setShowIssuePassword((prev) => !prev)}
+                    aria-label={
+                      showIssuePassword
+                        ? t('login.hide_key', { defaultValue: '隐藏密钥' })
+                        : t('login.show_key', { defaultValue: '显示密钥' })
+                    }
+                    title={
+                      showIssuePassword
+                        ? t('login.hide_key', { defaultValue: '隐藏密钥' })
+                        : t('login.show_key', { defaultValue: '显示密钥' })
+                    }
+                  >
+                    {showIssuePassword ? <IconEyeOff size={16} /> : <IconEye size={16} />}
+                  </button>
+                }
+              />
+
               <div className={styles.toggleAdvanced}>
                 <SelectionCheckbox
                   checked={rememberPassword}
@@ -303,11 +460,46 @@ export function LoginPage() {
                 {loading ? t('login.submitting') : t('login.submit_button')}
               </Button>
 
+              <Button fullWidth variant="secondary" onClick={handleIssueAndLogin} loading={issueLoading}>
+                {issueLoading ? t('login.submitting') : t('login.issue_button')}
+              </Button>
+
               {error && <div className={styles.errorBox}>{error}</div>}
             </div>
           </div>
         )}
       </div>
+      <Modal
+        open={issuedKeyResult !== null}
+        onClose={() => {
+          if (issueConfirmLoading) return;
+          setIssuedKeyResult(null);
+        }}
+        closeDisabled={issueConfirmLoading}
+        title={t('login.issue_result_title')}
+        footer={
+          <div className={styles.issueResultFooter}>
+            <Button variant="secondary" onClick={handleCopyIssuedKey} disabled={issueConfirmLoading}>
+              {t('common.copy')}
+            </Button>
+            <Button onClick={handleConfirmIssuedKey} loading={issueConfirmLoading}>
+              {t('common.confirm')}
+            </Button>
+          </div>
+        }
+      >
+        <div className={styles.issueResultBody}>
+          <p className={styles.issueResultDescription}>{t('login.issue_result_desc')}</p>
+          <div className={styles.issueResultField}>
+            <div className={styles.issueResultLabel}>{t('login.issue_result_key_label')}</div>
+            <code className={styles.issueResultValue}>{issuedKeyResult?.api_key ?? ''}</code>
+          </div>
+          <div className={styles.issueResultField}>
+            <div className={styles.issueResultLabel}>{t('login.issue_result_role_label')}</div>
+            <div className={styles.issueResultMeta}>{issuedKeyResult?.role ?? 'viewer'}</div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
