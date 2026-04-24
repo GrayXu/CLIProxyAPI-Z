@@ -5,6 +5,7 @@ import { USAGE_STATS_STALE_TIME_MS, useSessionStore, useUsageStatsStore } from '
 import type { AuthFileItem, Config } from '@/types';
 import type { CredentialInfo, SourceInfo } from '@/types/sourceInfo';
 import { buildSourceInfoMap, resolveSourceDisplay } from '@/utils/sourceResolver';
+import { parseTimestampMs } from '@/utils/timestamp';
 import {
   collectUsageDetailsWithEndpoint,
   normalizeAuthIndex,
@@ -186,7 +187,7 @@ export function useTraceResolver(options: UseTraceResolverOptions): UseTraceReso
     if (!logPath) return [];
 
     const logTimestampMs = traceLogLine.timestamp
-      ? Date.parse(traceLogLine.timestamp)
+      ? parseTimestampMs(traceLogLine.timestamp)
       : Number.NaN;
 
     // Step 1: filter by path match

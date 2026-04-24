@@ -6,21 +6,22 @@ import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import iconVertex from '@/assets/icons/vertex.svg';
 import type { ProviderKeyConfig } from '@/types';
 import { maskApiKey } from '@/utils/format';
-import {
-  buildCandidateUsageSourceIds,
-  calculateStatusBarData,
-  type KeyStats,
-  type UsageDetail,
-} from '@/utils/usage';
+import { calculateStatusBarData } from '@/utils/usage';
+import { type UsageDetailsByAuthIndex, type UsageDetailsBySource } from '@/utils/usageIndex';
 import styles from '@/pages/AiProvidersPage.module.scss';
 import { ProviderList } from '../ProviderList';
 import { ProviderStatusBar } from '../ProviderStatusBar';
-import { getStatsBySource, hasDisableAllModelsRule } from '../utils';
+import {
+  collectUsageDetailsForIdentity,
+  getProviderConfigKey,
+  getStatsFromUsageDetails,
+  hasDisableAllModelsRule,
+} from '../utils';
 
 interface VertexSectionProps {
   configs: ProviderKeyConfig[];
-  keyStats: KeyStats;
-  usageDetails: UsageDetail[];
+  usageDetailsBySource: UsageDetailsBySource;
+  usageDetailsByAuthIndex: UsageDetailsByAuthIndex;
   loading: boolean;
   disableControls: boolean;
   isSwitching: boolean;
@@ -32,8 +33,8 @@ interface VertexSectionProps {
 
 export function VertexSection({
   configs,
-  keyStats,
-  usageDetails,
+  usageDetailsBySource,
+  usageDetailsByAuthIndex,
   loading,
   disableControls,
   isSwitching,
@@ -46,23 +47,24 @@ export function VertexSection({
   const actionsDisabled = disableControls || loading || isSwitching;
   const toggleDisabled = disableControls || loading || isSwitching;
 
-  const statusBarCache = useMemo(() => {
-    const cache = new Map<string, ReturnType<typeof calculateStatusBarData>>();
+  const usageDetailsCache = useMemo(() => {
+    const cache = new Map<string, ReturnType<typeof collectUsageDetailsForIdentity>>();
 
-    configs.forEach((config) => {
+    configs.forEach((config, index) => {
       if (!config.apiKey) return;
-      const candidates = buildCandidateUsageSourceIds({
-        apiKey: config.apiKey,
-        prefix: config.prefix,
-      });
-      if (!candidates.length) return;
-      const candidateSet = new Set(candidates);
-      const filteredDetails = usageDetails.filter((detail) => candidateSet.has(detail.source));
-      cache.set(config.apiKey, calculateStatusBarData(filteredDetails));
+      const configKey = getProviderConfigKey(config, index);
+      cache.set(
+        configKey,
+        collectUsageDetailsForIdentity(
+          { authIndex: config.authIndex, apiKey: config.apiKey, prefix: config.prefix },
+          usageDetailsBySource,
+          usageDetailsByAuthIndex
+        )
+      );
     });
 
     return cache;
-  }, [configs, usageDetails]);
+  }, [configs, usageDetailsByAuthIndex, usageDetailsBySource]);
 
   return (
     <>
@@ -82,7 +84,7 @@ export function VertexSection({
         <ProviderList<ProviderKeyConfig>
           items={configs}
           loading={loading}
-          keyField={(item) => item.apiKey}
+          keyField={(item, index) => getProviderConfigKey(item, index)}
           emptyTitle={t('ai_providers.vertex_empty_title')}
           emptyDescription={t('ai_providers.vertex_empty_desc')}
           onEdit={onEdit}
@@ -98,11 +100,13 @@ export function VertexSection({
             />
           )}
           renderContent={(item, index) => {
-            const stats = getStatsBySource(item.apiKey, keyStats, item.prefix);
             const headerEntries = Object.entries(item.headers || {});
             const configDisabled = hasDisableAllModelsRule(item.excludedModels);
             const excludedModels = item.excludedModels ?? [];
-            const statusData = statusBarCache.get(item.apiKey) || calculateStatusBarData([]);
+            const usageDetails =
+              usageDetailsCache.get(getProviderConfigKey(item, index)) ?? [];
+            const stats = getStatsFromUsageDetails(usageDetails);
+            const statusData = calculateStatusBarData(usageDetails);
 
             return (
               <Fragment>

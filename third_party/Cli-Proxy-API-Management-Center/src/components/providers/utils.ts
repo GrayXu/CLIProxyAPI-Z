@@ -1,8 +1,27 @@
-import type { AmpcodeConfig, AmpcodeModelMapping, AmpcodeUpstreamApiKeyMapping, ApiKeyEntry } from '@/types';
-import { buildCandidateUsageSourceIds, type KeyStatBucket, type KeyStats } from '@/utils/usage';
+import type {
+  AmpcodeConfig,
+  AmpcodeModelMapping,
+  AmpcodeUpstreamApiKeyMapping,
+  ApiKeyEntry,
+  OpenAIProviderConfig,
+} from '@/types';
+import {
+  buildCandidateUsageSourceIds,
+  normalizeAuthIndex,
+  type KeyStatBucket,
+  type KeyStats,
+  type UsageDetail,
+} from '@/utils/usage';
+import {
+  collectUsageDetailsForAuthIndices,
+  collectUsageDetailsForCandidates,
+  type UsageDetailsByAuthIndex,
+  type UsageDetailsBySource,
+} from '@/utils/usageIndex';
 import type { AmpcodeFormState, AmpcodeUpstreamApiKeyEntry, ModelEntry } from './types';
 
 export const DISABLE_ALL_MODELS_RULE = '*';
+const EMPTY_USAGE_DETAILS: UsageDetail[] = [];
 
 export const hasDisableAllModelsRule = (models?: string[]) =>
   Array.isArray(models) &&
@@ -109,30 +128,158 @@ export const getStatsBySource = (
   return { success, failure };
 };
 
-// 对于 OpenAI 提供商，汇总所有 apiKeyEntries 的统计 - 与旧版逻辑一致
-export const getOpenAIProviderStats = (
-  apiKeyEntries: ApiKeyEntry[] | undefined,
-  keyStats: KeyStats,
-  providerPrefix?: string
-): KeyStatBucket => {
-  const bySource = keyStats.bySource ?? {};
+type UsageIdentity = {
+  authIndex?: unknown;
+  apiKey?: string;
+  prefix?: string;
+};
 
-  const sourceIds = new Set<string>();
-  buildCandidateUsageSourceIds({ prefix: providerPrefix }).forEach((id) => sourceIds.add(id));
-  (apiKeyEntries || []).forEach((entry) => {
-    buildCandidateUsageSourceIds({ apiKey: entry?.apiKey }).forEach((id) => sourceIds.add(id));
-  });
-
+export const getStatsFromUsageDetails = (usageDetails: UsageDetail[]): KeyStatBucket => {
   let success = 0;
   let failure = 0;
-  sourceIds.forEach((id) => {
-    const stats = bySource[id];
-    if (!stats) return;
-    success += stats.success;
-    failure += stats.failure;
+
+  usageDetails.forEach((detail) => {
+    if (detail.failed) {
+      failure += 1;
+      return;
+    }
+    success += 1;
   });
 
   return { success, failure };
+};
+
+const dedupeUsageDetails = (groups: UsageDetail[][]): UsageDetail[] => {
+  if (!groups.length) {
+    return EMPTY_USAGE_DETAILS;
+  }
+
+  const seen = new Set<UsageDetail>();
+  const deduped: UsageDetail[] = [];
+
+  groups.forEach((details) => {
+    details.forEach((detail) => {
+      if (seen.has(detail)) {
+        return;
+      }
+      seen.add(detail);
+      deduped.push(detail);
+    });
+  });
+
+  return deduped.length ? deduped : EMPTY_USAGE_DETAILS;
+};
+
+export const collectUsageDetailsForIdentity = (
+  identity: UsageIdentity,
+  usageDetailsBySource: UsageDetailsBySource,
+  usageDetailsByAuthIndex: UsageDetailsByAuthIndex
+): UsageDetail[] => {
+  const groups: UsageDetail[][] = [];
+
+  const authIndexKey = normalizeAuthIndex(identity.authIndex);
+  if (authIndexKey) {
+    groups.push(collectUsageDetailsForAuthIndices(usageDetailsByAuthIndex, [authIndexKey]));
+  }
+
+  const candidates = buildCandidateUsageSourceIds({
+    apiKey: identity.apiKey,
+    prefix: identity.prefix,
+  });
+  if (candidates.length) {
+    groups.push(collectUsageDetailsForCandidates(usageDetailsBySource, candidates));
+  }
+
+  return dedupeUsageDetails(groups);
+};
+
+export const getStatsForIdentity = (
+  identity: UsageIdentity,
+  usageDetailsBySource: UsageDetailsBySource,
+  usageDetailsByAuthIndex: UsageDetailsByAuthIndex
+): KeyStatBucket => {
+  return getStatsFromUsageDetails(
+    collectUsageDetailsForIdentity(identity, usageDetailsBySource, usageDetailsByAuthIndex)
+  );
+};
+
+export const collectOpenAIProviderUsageDetails = (
+  provider: OpenAIProviderConfig,
+  usageDetailsBySource: UsageDetailsBySource,
+  usageDetailsByAuthIndex: UsageDetailsByAuthIndex
+): UsageDetail[] => {
+  if (!provider.apiKeyEntries?.length) {
+    return collectUsageDetailsForIdentity(
+      { authIndex: provider.authIndex, prefix: provider.prefix },
+      usageDetailsBySource,
+      usageDetailsByAuthIndex
+    );
+  }
+
+  const groups: UsageDetail[][] = [];
+  if (provider.prefix) {
+    groups.push(
+      collectUsageDetailsForIdentity(
+        { prefix: provider.prefix },
+        usageDetailsBySource,
+        usageDetailsByAuthIndex
+      )
+    );
+  }
+
+  provider.apiKeyEntries.forEach((entry) => {
+    groups.push(
+      collectUsageDetailsForIdentity(
+        { authIndex: entry.authIndex, apiKey: entry.apiKey },
+        usageDetailsBySource,
+        usageDetailsByAuthIndex
+      )
+    );
+  });
+
+  return dedupeUsageDetails(groups);
+};
+
+export const getOpenAIProviderStats = (
+  provider: OpenAIProviderConfig,
+  usageDetailsBySource: UsageDetailsBySource,
+  usageDetailsByAuthIndex: UsageDetailsByAuthIndex
+): KeyStatBucket => {
+  return getStatsFromUsageDetails(
+    collectOpenAIProviderUsageDetails(provider, usageDetailsBySource, usageDetailsByAuthIndex)
+  );
+};
+
+export const getProviderConfigKey = (
+  config: {
+    authIndex?: unknown;
+    apiKey?: string;
+    baseUrl?: string;
+    proxyUrl?: string;
+  },
+  index: number
+): string => {
+  const authIndexKey = normalizeAuthIndex(config.authIndex);
+  if (authIndexKey) {
+    return authIndexKey;
+  }
+  return `${config.apiKey ?? ''}::${config.baseUrl ?? ''}::${config.proxyUrl ?? ''}::${index}`;
+};
+
+export const getOpenAIProviderKey = (provider: OpenAIProviderConfig, index: number): string => {
+  const authIndexKey = normalizeAuthIndex(provider.authIndex);
+  if (authIndexKey) {
+    return authIndexKey;
+  }
+  return `${provider.name}::${provider.baseUrl}::${provider.prefix ?? ''}::${index}`;
+};
+
+export const getOpenAIEntryKey = (entry: ApiKeyEntry, index: number): string => {
+  const authIndexKey = normalizeAuthIndex(entry.authIndex);
+  if (authIndexKey) {
+    return authIndexKey;
+  }
+  return `${entry.apiKey}::${entry.proxyUrl ?? ''}::${index}`;
 };
 
 export const buildApiKeyEntry = (input?: Partial<ApiKeyEntry>): ApiKeyEntry => ({
