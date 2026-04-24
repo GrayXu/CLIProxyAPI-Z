@@ -24,6 +24,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/middleware"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules"
 	ampmodule "github.com/router-for-me/CLIProxyAPI/v6/internal/api/modules/amp"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
@@ -281,6 +282,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 	managementasset.SetCurrentConfig(cfg)
 	auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
+	applySignatureCacheConfig(nil, cfg)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 	if optionState.localPassword != "" {
@@ -338,6 +340,17 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 // setupRoutes configures the API routes for the server.
 // It defines the endpoints and associates them with their respective handlers.
 func (s *Server) setupRoutes() {
+	healthzHandler := func(c *gin.Context) {
+		if c.Request.Method == http.MethodHead {
+			c.Status(http.StatusOK)
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	}
+	s.engine.GET("/healthz", healthzHandler)
+	s.engine.HEAD("/healthz", healthzHandler)
+
 	s.engine.GET("/management.html", s.serveManagementControlPanel)
 	openaiHandlers := openai.NewOpenAIAPIHandler(s.handlers)
 	geminiHandlers := gemini.NewGeminiAPIHandler(s.handlers)
@@ -352,11 +365,22 @@ func (s *Server) setupRoutes() {
 		v1.GET("/models", s.unifiedModelsHandler(openaiHandlers, claudeCodeHandlers))
 		v1.POST("/chat/completions", openaiHandlers.ChatCompletions)
 		v1.POST("/completions", openaiHandlers.Completions)
+		v1.POST("/images/generations", openaiHandlers.ImagesGenerations)
+		v1.POST("/images/edits", openaiHandlers.ImagesEdits)
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 		v1.POST("/messages/count_tokens", claudeCodeHandlers.ClaudeCountTokens)
 		v1.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
 		v1.POST("/responses", openaiResponsesHandlers.Responses)
 		v1.POST("/responses/compact", openaiResponsesHandlers.Compact)
+	}
+
+	// Codex CLI direct route aliases (chatgpt_base_url compatible)
+	codexDirect := s.engine.Group("/backend-api/codex")
+	codexDirect.Use(AuthMiddleware(s.accessManager))
+	{
+		codexDirect.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
+		codexDirect.POST("/responses", openaiResponsesHandlers.Responses)
+		codexDirect.POST("/responses/compact", openaiResponsesHandlers.Compact)
 	}
 
 	// Gemini compatible API routes
@@ -421,20 +445,6 @@ func (s *Server) setupRoutes() {
 		}
 		if state != "" {
 			_, _ = managementHandlers.WriteOAuthCallbackFileForPendingSession(s.cfg.AuthDir, "gemini", state, code, errStr)
-		}
-		c.Header("Content-Type", "text/html; charset=utf-8")
-		c.String(http.StatusOK, oauthCallbackSuccessHTML)
-	})
-
-	s.engine.GET("/iflow/callback", func(c *gin.Context) {
-		code := c.Query("code")
-		state := c.Query("state")
-		errStr := c.Query("error")
-		if errStr == "" {
-			errStr = c.Query("error_description")
-		}
-		if state != "" {
-			_, _ = managementHandlers.WriteOAuthCallbackFileForPendingSession(s.cfg.AuthDir, "iflow", state, code, errStr)
 		}
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.String(http.StatusOK, oauthCallbackSuccessHTML)
@@ -659,18 +669,15 @@ func (s *Server) registerManagementRoutes() {
 		admin.PATCH("/auth-files/status", s.mgmt.PatchAuthFileStatus)
 		admin.PATCH("/auth-files/fields", s.mgmt.PatchAuthFileFields)
 		admin.POST("/vertex/import", s.mgmt.ImportVertexCredential)
-
-		admin.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
-		admin.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
-		admin.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
-		admin.GET("/antigravity-auth-url", s.mgmt.RequestAntigravityToken)
-		admin.GET("/qwen-auth-url", s.mgmt.RequestQwenToken)
-		admin.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
-		admin.GET("/iflow-auth-url", s.mgmt.RequestIFlowToken)
-		admin.POST("/iflow-auth-url", s.mgmt.RequestIFlowCookieToken)
-		admin.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
-		admin.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 	}
+
+	mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
+	mgmt.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
+	mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
+	mgmt.GET("/antigravity-auth-url", s.mgmt.RequestAntigravityToken)
+	mgmt.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
+	mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
+	mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 }
 
 func (s *Server) managementAvailabilityMiddleware() gin.HandlerFunc {
@@ -955,6 +962,8 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 	}
 
+	applySignatureCacheConfig(oldCfg, cfg)
+
 	if s.handlers != nil && s.handlers.AuthManager != nil {
 		s.handlers.AuthManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
 	}
@@ -1092,4 +1101,38 @@ func AuthMiddleware(manager *sdkaccess.Manager) gin.HandlerFunc {
 		}
 		c.AbortWithStatusJSON(statusCode, gin.H{"error": err.Message})
 	}
+}
+
+func configuredSignatureCacheEnabled(cfg *config.Config) bool {
+	if cfg != nil && cfg.AntigravitySignatureCacheEnabled != nil {
+		return *cfg.AntigravitySignatureCacheEnabled
+	}
+	return true
+}
+
+func applySignatureCacheConfig(oldCfg, cfg *config.Config) {
+	newVal := configuredSignatureCacheEnabled(cfg)
+	newStrict := configuredSignatureBypassStrict(cfg)
+	if oldCfg == nil {
+		cache.SetSignatureCacheEnabled(newVal)
+		cache.SetSignatureBypassStrictMode(newStrict)
+		return
+	}
+
+	oldVal := configuredSignatureCacheEnabled(oldCfg)
+	if oldVal != newVal {
+		cache.SetSignatureCacheEnabled(newVal)
+	}
+
+	oldStrict := configuredSignatureBypassStrict(oldCfg)
+	if oldStrict != newStrict {
+		cache.SetSignatureBypassStrictMode(newStrict)
+	}
+}
+
+func configuredSignatureBypassStrict(cfg *config.Config) bool {
+	if cfg != nil && cfg.AntigravitySignatureBypassStrict != nil {
+		return *cfg.AntigravitySignatureBypassStrict
+	}
+	return false
 }

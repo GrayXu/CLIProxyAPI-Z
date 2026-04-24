@@ -140,7 +140,7 @@ func TestRefreshQuotaSnapshot_PreservesExistingWeeklyResetWithoutRecognizableWee
 		},
 	}
 
-	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", codexRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		body := `{"rate_limit":{"daily_window":{"limit_window_seconds":86400,"reset_after_seconds":30}}}`
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -179,7 +179,7 @@ func TestRefreshQuotaSnapshot_PreservesExistingWeeklyResetOnFetchError(t *testin
 		},
 	}
 
-	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", codexRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("boom")
 	}))
 
@@ -197,9 +197,9 @@ func TestRefreshQuotaSnapshot_PreservesExistingWeeklyResetOnFetchError(t *testin
 	}
 }
 
-type roundTripperFunc func(*http.Request) (*http.Response, error)
+type codexRoundTripperFunc func(*http.Request) (*http.Response, error)
 
-func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+func (fn codexRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
 }
 func itoa(v int64) string {
