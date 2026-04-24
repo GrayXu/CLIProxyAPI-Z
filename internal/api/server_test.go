@@ -47,6 +47,33 @@ func newTestServer(t *testing.T) *Server {
 	return NewServer(cfg, authManager, accessManager, configPath)
 }
 
+func newManagementTestServer(t *testing.T, cfg *proxyconfig.Config, opts ...ServerOption) *Server {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auth")
+	if err := os.MkdirAll(authDir, 0o700); err != nil {
+		t.Fatalf("failed to create auth dir: %v", err)
+	}
+
+	if cfg == nil {
+		cfg = &proxyconfig.Config{}
+	}
+	cfg.AuthDir = authDir
+	cfg.Port = 0
+	cfg.Debug = true
+	cfg.LoggingToFile = false
+	cfg.UsageStatisticsEnabled = false
+
+	authManager := auth.NewManager(nil, nil, nil)
+	accessManager := sdkaccess.NewManager()
+
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	return NewServer(cfg, authManager, accessManager, configPath, opts...)
+}
+
 func TestHealthz(t *testing.T) {
 	server := newTestServer(t)
 
@@ -277,5 +304,78 @@ func TestNewServerTrustsOnlyLocalReverseProxy(t *testing.T) {
 	}
 	if got := strings.TrimSpace(localResp.Body.String()); got != "203.0.113.20" {
 		t.Fatalf("local client ip = %q, want %q", got, "203.0.113.20")
+	}
+}
+
+func TestManagementOAuthHelpersRequireManagementAuth(t *testing.T) {
+	t.Parallel()
+
+	server := newManagementTestServer(t, &proxyconfig.Config{
+		RemoteManagement: proxyconfig.RemoteManagement{
+			SecretKey:           "admin-secret",
+			IssueAPIKeyPassword: "issue-me",
+		},
+	})
+
+	t.Run("helper route keeps allow-remote protection", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status", nil)
+		resp := httptest.NewRecorder()
+		server.engine.ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusForbidden {
+			t.Fatalf("remote helper status = %d, want %d; body=%s", resp.Code, http.StatusForbidden, resp.Body.String())
+		}
+	})
+
+	t.Run("helper route requires management key for localhost", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v0/management/get-auth-status", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		resp := httptest.NewRecorder()
+		server.engine.ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusUnauthorized {
+			t.Fatalf("local helper status = %d, want %d; body=%s", resp.Code, http.StatusUnauthorized, resp.Body.String())
+		}
+	})
+
+	t.Run("public issue-api-key stays outside management auth middleware", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v0/management/public/issue-api-key", strings.NewReader(`{}`))
+		req.RemoteAddr = "127.0.0.1:12345"
+		resp := httptest.NewRecorder()
+		server.engine.ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("public issue-api-key status = %d, want %d; body=%s", resp.Code, http.StatusBadRequest, resp.Body.String())
+		}
+	})
+}
+
+func TestUpdateClientsKeepsLocalPasswordManagementRoutesEnabled(t *testing.T) {
+	t.Parallel()
+
+	cfg := &proxyconfig.Config{}
+	server := newManagementTestServer(t, cfg, WithLocalManagementPassword("local-secret"))
+
+	requestSession := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/v0/management/session", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("Authorization", "Bearer local-secret")
+		resp := httptest.NewRecorder()
+		server.engine.ServeHTTP(resp, req)
+		return resp
+	}
+
+	before := requestSession()
+	if before.Code != http.StatusOK {
+		t.Fatalf("session before reload = %d, want %d; body=%s", before.Code, http.StatusOK, before.Body.String())
+	}
+
+	reloadedCfg := *cfg
+	reloadedCfg.RequestLog = true
+	server.UpdateClients(&reloadedCfg)
+
+	after := requestSession()
+	if after.Code != http.StatusOK {
+		t.Fatalf("session after reload = %d, want %d; body=%s", after.Code, http.StatusOK, after.Body.String())
 	}
 }

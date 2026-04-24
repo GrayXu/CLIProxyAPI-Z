@@ -136,6 +136,30 @@ func selectorForRoutingStrategy(strategy string) coreauth.Selector {
 	}
 }
 
+func selectorForConfig(cfg *config.Config) coreauth.Selector {
+	if cfg == nil {
+		return selectorForRoutingStrategy("")
+	}
+
+	selector := selectorForRoutingStrategy(cfg.Routing.Strategy)
+	sessionAffinity := cfg.Routing.ClaudeCodeSessionAffinity || cfg.Routing.SessionAffinity
+	if !sessionAffinity {
+		return selector
+	}
+
+	ttl := time.Hour
+	if ttlStr := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttlStr != "" {
+		if parsed, err := time.ParseDuration(ttlStr); err == nil && parsed > 0 {
+			ttl = parsed
+		}
+	}
+
+	return coreauth.NewSessionAffinitySelectorWithConfig(coreauth.SessionAffinityConfig{
+		Fallback: selector,
+		TTL:      ttl,
+	})
+}
+
 func (s *Service) ensureAuthUpdateQueue(ctx context.Context) {
 	if s == nil {
 		return
@@ -521,7 +545,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	s.applyRetryConfig(s.cfg)
 	if s.coreManager != nil {
-		s.coreManager.SetSelector(selectorForRoutingStrategy(s.cfg.Routing.Strategy))
+		s.coreManager.SetSelector(selectorForConfig(s.cfg))
 	}
 
 	if s.coreManager != nil {
@@ -668,22 +692,7 @@ func (s *Service) Run(ctx context.Context) error {
 			previousSessionAffinityTTL != nextSessionAffinityTTL
 
 		if s.coreManager != nil && selectorChanged {
-			selector := selectorForRoutingStrategy(nextStrategy)
-
-			if nextSessionAffinity {
-				ttl := time.Hour
-				if ttlStr := strings.TrimSpace(nextSessionAffinityTTL); ttlStr != "" {
-					if parsed, err := time.ParseDuration(ttlStr); err == nil && parsed > 0 {
-						ttl = parsed
-					}
-				}
-				selector = coreauth.NewSessionAffinitySelectorWithConfig(coreauth.SessionAffinityConfig{
-					Fallback: selector,
-					TTL:      ttl,
-				})
-			}
-
-			s.coreManager.SetSelector(selector)
+			s.coreManager.SetSelector(selectorForConfig(newCfg))
 		}
 
 		s.applyRetryConfig(newCfg)

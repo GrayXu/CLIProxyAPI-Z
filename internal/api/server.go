@@ -196,6 +196,17 @@ func hasManagementPublicIssuance(cfg *config.Config) bool {
 	return cfg != nil && strings.TrimSpace(cfg.RemoteManagement.IssueAPIKeyPassword) != ""
 }
 
+func (s *Server) managementRoutesShouldBeEnabled(cfg *config.Config) bool {
+	if s == nil {
+		return false
+	}
+	return s.envManagementSecret ||
+		s.localPassword != "" ||
+		(cfg != nil && (cfg.RemoteManagement.SecretKey != "" ||
+			hasViewerManagementKey(cfg) ||
+			hasManagementPublicIssuance(cfg)))
+}
+
 // NewServer creates and initializes a new API server instance.
 // It sets up the Gin engine, middleware, routes, and handlers.
 //
@@ -318,7 +329,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 
 	// Register management routes when configuration or environment secrets are available,
 	// or when a local management password is provided (e.g. TUI mode).
-	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || s.localPassword != "" || hasViewerManagementKey(cfg) || hasManagementPublicIssuance(cfg)
+	hasManagementSecret := s.managementRoutesShouldBeEnabled(cfg)
 	s.managementRoutesEnabled.Store(hasManagementSecret)
 	if hasManagementSecret {
 		s.registerManagementRoutes()
@@ -520,6 +531,13 @@ func (s *Server) registerManagementRoutes() {
 
 	protected := mgmt.Group("")
 	protected.Use(s.mgmt.Middleware())
+	protected.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
+	protected.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
+	protected.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
+	protected.GET("/antigravity-auth-url", s.mgmt.RequestAntigravityToken)
+	protected.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
+	protected.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
+	protected.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 	admin := protected.Group("")
 	admin.Use(s.mgmt.RequireAdmin())
 	{
@@ -671,13 +689,6 @@ func (s *Server) registerManagementRoutes() {
 		admin.POST("/vertex/import", s.mgmt.ImportVertexCredential)
 	}
 
-	mgmt.GET("/anthropic-auth-url", s.mgmt.RequestAnthropicToken)
-	mgmt.GET("/codex-auth-url", s.mgmt.RequestCodexToken)
-	mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
-	mgmt.GET("/antigravity-auth-url", s.mgmt.RequestAntigravityToken)
-	mgmt.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
-	mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
-	mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 }
 
 func (s *Server) managementAvailabilityMiddleware() gin.HandlerFunc {
@@ -973,11 +984,8 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		util.SetLogLevel(cfg)
 	}
 
-	prevRoutesEnabled := false
-	if oldCfg != nil {
-		prevRoutesEnabled = oldCfg.RemoteManagement.SecretKey != "" || hasViewerManagementKey(oldCfg) || hasManagementPublicIssuance(oldCfg)
-	}
-	newRoutesEnabled := cfg.RemoteManagement.SecretKey != "" || hasViewerManagementKey(cfg) || hasManagementPublicIssuance(cfg)
+	prevRoutesEnabled := s.managementRoutesShouldBeEnabled(oldCfg)
+	newRoutesEnabled := s.managementRoutesShouldBeEnabled(cfg)
 	if s.envManagementSecret {
 		s.registerManagementRoutes()
 		if s.managementRoutesEnabled.CompareAndSwap(false, true) {
