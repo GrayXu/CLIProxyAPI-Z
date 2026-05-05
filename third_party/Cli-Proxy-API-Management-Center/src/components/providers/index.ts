@@ -8,5 +8,6 @@ export { ProviderList } from './ProviderList';
 export { ProviderStatusBar } from './ProviderStatusBar';
 export { ProviderNav } from './ProviderNav';
 export * from './hooks/useProviderStats';
+export * from './hooks/useProviderRecentRequests';
 export * from './types';
 export * from './utils';
