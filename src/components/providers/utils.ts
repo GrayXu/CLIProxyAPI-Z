@@ -1,5 +1,20 @@
-import type { AmpcodeConfig, AmpcodeModelMapping, AmpcodeUpstreamApiKeyMapping, ApiKeyEntry } from '@/types';
-import { buildCandidateUsageSourceIds, type KeyStatBucket, type KeyStats } from '@/utils/usage';
+import type {
+  AmpcodeConfig,
+  AmpcodeModelMapping,
+  AmpcodeUpstreamApiKeyMapping,
+  ApiKeyEntry,
+  OpenAIProviderConfig,
+} from '@/types';
+import {
+  buildRecentRequestCompositeKey,
+  mergeRecentRequestBucketGroups,
+  normalizeRecentRequestAuthIndex,
+  statusBarDataFromRecentRequests,
+  sumRecentRequests,
+  type RecentRequestBucket,
+  type RecentRequestUsageEntry,
+  type StatusBarData,
+} from '@/utils/recentRequests';
 import type { AmpcodeFormState, AmpcodeUpstreamApiKeyEntry, ModelEntry } from './types';
 
 export const DISABLE_ALL_MODELS_RULE = '*';
@@ -85,54 +100,175 @@ export const buildClaudeMessagesEndpoint = (baseUrl: string): string => {
   return `${trimmed}/v1/messages`;
 };
 
-// 根据 source (apiKey) 获取统计数据 - 与旧版逻辑一致
-export const getStatsBySource = (
-  apiKey: string,
-  keyStats: KeyStats,
-  prefix?: string
-): KeyStatBucket => {
-  const bySource = keyStats.bySource ?? {};
-  const candidates = buildCandidateUsageSourceIds({ apiKey, prefix });
-  if (!candidates.length) {
-    return { success: 0, failure: 0 };
-  }
+export type ProviderRecentUsageMap = Map<string, Map<string, RecentRequestUsageEntry>>;
 
-  let success = 0;
-  let failure = 0;
-  candidates.forEach((candidate) => {
-    const stats = bySource[candidate];
-    if (!stats) return;
-    success += stats.success;
-    failure += stats.failure;
-  });
-
-  return { success, failure };
+const EMPTY_RECENT_USAGE_ENTRY: RecentRequestUsageEntry = {
+  success: 0,
+  failed: 0,
+  recentRequests: [],
 };
 
-// 对于 OpenAI 提供商，汇总所有 apiKeyEntries 的统计 - 与旧版逻辑一致
-export const getOpenAIProviderStats = (
-  apiKeyEntries: ApiKeyEntry[] | undefined,
-  keyStats: KeyStats,
-  providerPrefix?: string
-): KeyStatBucket => {
-  const bySource = keyStats.bySource ?? {};
+const normalizeProviderRecentKey = (value: unknown): string =>
+  String(value ?? '').trim().toLowerCase();
 
-  const sourceIds = new Set<string>();
-  buildCandidateUsageSourceIds({ prefix: providerPrefix }).forEach((id) => sourceIds.add(id));
-  (apiKeyEntries || []).forEach((entry) => {
-    buildCandidateUsageSourceIds({ apiKey: entry?.apiKey }).forEach((id) => sourceIds.add(id));
-  });
+export function getProviderRecentUsageEntry(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): RecentRequestUsageEntry {
+  if (!String(apiKey ?? '').trim()) {
+    return EMPTY_RECENT_USAGE_ENTRY;
+  }
 
-  let success = 0;
-  let failure = 0;
-  sourceIds.forEach((id) => {
-    const stats = bySource[id];
-    if (!stats) return;
-    success += stats.success;
-    failure += stats.failure;
-  });
+  const providerKey = normalizeProviderRecentKey(provider);
+  const compositeKey = buildRecentRequestCompositeKey(baseUrl, apiKey);
+  return usageByProvider.get(providerKey)?.get(compositeKey) ?? EMPTY_RECENT_USAGE_ENTRY;
+}
 
-  return { success, failure };
+export function getProviderRecentBuckets(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): RecentRequestBucket[] {
+  return getProviderRecentUsageEntry(
+    usageByProvider,
+    provider,
+    apiKey,
+    baseUrl
+  ).recentRequests;
+}
+
+export function getProviderTotalStats(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): { success: number; failure: number } {
+  const entry = getProviderRecentUsageEntry(usageByProvider, provider, apiKey, baseUrl);
+  return { success: entry.success, failure: entry.failed };
+}
+
+export function getProviderRecentWindowStats(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): { success: number; failure: number } {
+  return sumRecentRequests(getProviderRecentBuckets(usageByProvider, provider, apiKey, baseUrl));
+}
+
+export function getProviderRecentStats(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): { success: number; failure: number } {
+  return getProviderTotalStats(usageByProvider, provider, apiKey, baseUrl);
+}
+
+export function getProviderRecentStatusData(
+  usageByProvider: ProviderRecentUsageMap,
+  provider: string,
+  apiKey?: string,
+  baseUrl?: string
+): StatusBarData {
+  return statusBarDataFromRecentRequests(
+    getProviderRecentBuckets(usageByProvider, provider, apiKey, baseUrl)
+  );
+}
+
+export function collectOpenAIProviderRecentBuckets(
+  provider: OpenAIProviderConfig,
+  usageByProvider: ProviderRecentUsageMap
+): RecentRequestBucket[] {
+  if (!provider.apiKeyEntries?.length) {
+    return [];
+  }
+
+  const groups = provider.apiKeyEntries.map((entry) =>
+    getProviderRecentBuckets(usageByProvider, provider.name, entry.apiKey, provider.baseUrl)
+  );
+
+  return mergeRecentRequestBucketGroups(groups);
+}
+
+export function getOpenAIProviderRecentStats(
+  provider: OpenAIProviderConfig,
+  usageByProvider: ProviderRecentUsageMap
+): { success: number; failure: number } {
+  return getOpenAIProviderTotalStats(provider, usageByProvider);
+}
+
+export function getOpenAIProviderTotalStats(
+  provider: OpenAIProviderConfig,
+  usageByProvider: ProviderRecentUsageMap
+): { success: number; failure: number } {
+  return (provider.apiKeyEntries || []).reduce(
+    (total, entry) => {
+      const usageEntry = getProviderRecentUsageEntry(
+        usageByProvider,
+        provider.name,
+        entry.apiKey,
+        provider.baseUrl
+      );
+
+      return {
+        success: total.success + usageEntry.success,
+        failure: total.failure + usageEntry.failed,
+      };
+    },
+    { success: 0, failure: 0 }
+  );
+}
+
+export function getOpenAIProviderRecentWindowStats(
+  provider: OpenAIProviderConfig,
+  usageByProvider: ProviderRecentUsageMap
+): { success: number; failure: number } {
+  return sumRecentRequests(collectOpenAIProviderRecentBuckets(provider, usageByProvider));
+}
+
+export function getOpenAIProviderRecentStatusData(
+  provider: OpenAIProviderConfig,
+  usageByProvider: ProviderRecentUsageMap
+): StatusBarData {
+  return statusBarDataFromRecentRequests(
+    collectOpenAIProviderRecentBuckets(provider, usageByProvider)
+  );
+}
+
+export const getProviderConfigKey = (
+  config: {
+    authIndex?: unknown;
+    apiKey?: string;
+    baseUrl?: string;
+    proxyUrl?: string;
+  },
+  index: number
+): string => {
+  const authIndexKey = normalizeRecentRequestAuthIndex(config.authIndex);
+  if (authIndexKey) {
+    return authIndexKey;
+  }
+  return `${config.apiKey ?? ''}::${config.baseUrl ?? ''}::${config.proxyUrl ?? ''}::${index}`;
+};
+
+export const getOpenAIProviderKey = (provider: OpenAIProviderConfig, index: number): string => {
+  const authIndexKey = normalizeRecentRequestAuthIndex(provider.authIndex);
+  if (authIndexKey) {
+    return authIndexKey;
+  }
+  return `${provider.name}::${provider.baseUrl}::${provider.prefix ?? ''}::${index}`;
+};
+
+export const getOpenAIEntryKey = (entry: ApiKeyEntry, index: number): string => {
+  const authIndexKey = normalizeRecentRequestAuthIndex(entry.authIndex);
+  if (authIndexKey) {
+    return authIndexKey;
+  }
+  return `${entry.apiKey}::${entry.proxyUrl ?? ''}::${index}`;
 };
 
 export const buildApiKeyEntry = (input?: Partial<ApiKeyEntry>): ApiKeyEntry => ({

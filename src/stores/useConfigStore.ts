@@ -38,7 +38,6 @@ const SECTION_KEYS: RawConfigSection[] = [
   'proxy-url',
   'request-retry',
   'quota-exceeded',
-  'usage-statistics-enabled',
   'request-log',
   'logging-to-file',
   'logs-max-total-size-mb',
@@ -66,8 +65,6 @@ const extractSectionValue = (config: Config | null, section?: RawConfigSection) 
       return config.requestRetry;
     case 'quota-exceeded':
       return config.quotaExceeded;
-    case 'usage-statistics-enabled':
-      return config.usageStatisticsEnabled;
     case 'request-log':
       return config.requestLog;
     case 'logging-to-file':
@@ -202,9 +199,6 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         case 'quota-exceeded':
           nextConfig.quotaExceeded = value as Config['quotaExceeded'];
           break;
-        case 'usage-statistics-enabled':
-          nextConfig.usageStatisticsEnabled = value as Config['usageStatisticsEnabled'];
-          break;
         case 'request-log':
           nextConfig.requestLog = value as Config['requestLog'];
           break;
@@ -267,7 +261,12 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       // 同时清除完整配置缓存
       newCache.delete('__full__');
 
-      set({ cache: newCache });
+      // Section-level invalidation usually follows an optimistic write path. Invalidate any in-flight
+      // full fetch so stale responses can't overwrite newer local changes.
+      configRequestToken += 1;
+      inFlightConfigRequest = null;
+
+      set({ cache: newCache, loading: false, error: null });
       return;
     } else {
       newCache.clear();

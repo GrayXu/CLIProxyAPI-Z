@@ -6,21 +6,21 @@ import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import iconClaude from '@/assets/icons/claude.svg';
 import type { ProviderKeyConfig } from '@/types';
 import { maskApiKey } from '@/utils/format';
-import {
-  buildCandidateUsageSourceIds,
-  calculateStatusBarData,
-  type KeyStats,
-  type UsageDetail,
-} from '@/utils/usage';
+import { statusBarDataFromRecentRequests } from '@/utils/recentRequests';
 import styles from '@/pages/AiProvidersPage.module.scss';
 import { ProviderList } from '../ProviderList';
 import { ProviderStatusBar } from '../ProviderStatusBar';
-import { getStatsBySource, hasDisableAllModelsRule } from '../utils';
+import {
+  getProviderConfigKey,
+  getProviderRecentBuckets,
+  getProviderTotalStats,
+  hasDisableAllModelsRule,
+  type ProviderRecentUsageMap,
+} from '../utils';
 
 interface ClaudeSectionProps {
   configs: ProviderKeyConfig[];
-  keyStats: KeyStats;
-  usageDetails: UsageDetail[];
+  usageByProvider: ProviderRecentUsageMap;
   loading: boolean;
   disableControls: boolean;
   isSwitching: boolean;
@@ -32,8 +32,7 @@ interface ClaudeSectionProps {
 
 export function ClaudeSection({
   configs,
-  keyStats,
-  usageDetails,
+  usageByProvider,
   loading,
   disableControls,
   isSwitching,
@@ -47,22 +46,21 @@ export function ClaudeSection({
   const toggleDisabled = disableControls || loading || isSwitching;
 
   const statusBarCache = useMemo(() => {
-    const cache = new Map<string, ReturnType<typeof calculateStatusBarData>>();
+    const cache = new Map<string, ReturnType<typeof statusBarDataFromRecentRequests>>();
 
-    configs.forEach((config) => {
+    configs.forEach((config, index) => {
       if (!config.apiKey) return;
-      const candidates = buildCandidateUsageSourceIds({
-        apiKey: config.apiKey,
-        prefix: config.prefix,
-      });
-      if (!candidates.length) return;
-      const candidateSet = new Set(candidates);
-      const filteredDetails = usageDetails.filter((detail) => candidateSet.has(detail.source));
-      cache.set(config.apiKey, calculateStatusBarData(filteredDetails));
+      const configKey = getProviderConfigKey(config, index);
+      cache.set(
+        configKey,
+        statusBarDataFromRecentRequests(
+          getProviderRecentBuckets(usageByProvider, 'claude', config.apiKey, config.baseUrl)
+        )
+      );
     });
 
     return cache;
-  }, [configs, usageDetails]);
+  }, [configs, usageByProvider]);
 
   return (
     <>
@@ -82,11 +80,11 @@ export function ClaudeSection({
         <ProviderList<ProviderKeyConfig>
           items={configs}
           loading={loading}
-          keyField={(item) => item.apiKey}
+          keyField={(item, index) => getProviderConfigKey(item, index)}
           emptyTitle={t('ai_providers.claude_empty_title')}
           emptyDescription={t('ai_providers.claude_empty_desc')}
-          onEdit={onEdit}
-          onDelete={onDelete}
+          onEdit={(_, index) => onEdit(index)}
+          onDelete={(_, index) => onDelete(index)}
           actionsDisabled={actionsDisabled}
           getRowDisabled={(item) => hasDisableAllModelsRule(item.excludedModels)}
           renderExtraActions={(item, index) => (
@@ -97,12 +95,19 @@ export function ClaudeSection({
               onChange={(value) => void onToggle(index, value)}
             />
           )}
-          renderContent={(item) => {
-            const stats = getStatsBySource(item.apiKey, keyStats, item.prefix);
+          renderContent={(item, index) => {
+            const stats = getProviderTotalStats(
+              usageByProvider,
+              'claude',
+              item.apiKey,
+              item.baseUrl
+            );
             const headerEntries = Object.entries(item.headers || {});
             const configDisabled = hasDisableAllModelsRule(item.excludedModels);
             const excludedModels = item.excludedModels ?? [];
-            const statusData = statusBarCache.get(item.apiKey) || calculateStatusBarData([]);
+            const statusData =
+              statusBarCache.get(getProviderConfigKey(item, index)) ||
+              statusBarDataFromRecentRequests([]);
 
             return (
               <Fragment>

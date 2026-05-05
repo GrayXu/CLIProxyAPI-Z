@@ -9,9 +9,10 @@ import { entriesToModels, modelsToEntries } from '@/components/ui/modelInputList
 import type { ApiKeyEntry, OpenAIProviderConfig } from '@/types';
 import type { ModelInfo } from '@/utils/models';
 import { buildHeaderObject, headersToEntries, normalizeHeaderEntries } from '@/utils/headers';
+import { areKeyValueEntriesEqual, areModelEntriesEqual } from '@/utils/compare';
 import { buildApiKeyEntry } from '@/components/providers/utils';
 import type { ModelEntry, OpenAIFormState } from '@/components/providers/types';
-import type { KeyTestStatus } from '@/stores/useOpenAIEditDraftStore';
+import type { KeyTestStatus, OpenAIEditBaseline } from '@/stores/useOpenAIEditDraftStore';
 
 type LocationState = { fromAiProviders?: boolean } | null;
 
@@ -103,18 +104,33 @@ const normalizeApiKeyEntries = (entries: ApiKeyEntry[]) =>
     return acc;
   }, []);
 
-const buildOpenAISignature = (form: OpenAIFormState, testModel: string) =>
-  JSON.stringify({
-    name: String(form.name ?? '').trim(),
-    priority:
-      form.priority !== undefined && Number.isFinite(form.priority) ? Math.trunc(form.priority) : null,
-    prefix: String(form.prefix ?? '').trim(),
-    baseUrl: String(form.baseUrl ?? '').trim(),
-    headers: normalizeHeaderEntries(form.headers),
-    apiKeyEntries: normalizeApiKeyEntries(form.apiKeyEntries),
-    models: normalizeModelEntries(form.modelEntries),
-    testModel: String(testModel ?? '').trim(),
-  });
+const buildOpenAIBaseline = (form: OpenAIFormState, testModel: string): OpenAIEditBaseline => ({
+  name: String(form.name ?? '').trim(),
+  priority:
+    form.priority !== undefined && Number.isFinite(form.priority) ? Math.trunc(form.priority) : null,
+  prefix: String(form.prefix ?? '').trim(),
+  baseUrl: String(form.baseUrl ?? '').trim(),
+  headers: normalizeHeaderEntries(form.headers),
+  apiKeyEntries: normalizeApiKeyEntries(form.apiKeyEntries),
+  models: normalizeModelEntries(form.modelEntries),
+  testModel: String(testModel ?? '').trim(),
+});
+
+const areNormalizedApiKeyEntriesEqual = (
+  a: OpenAIEditBaseline['apiKeyEntries'],
+  b: ReturnType<typeof normalizeApiKeyEntries>
+) => {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.apiKey !== right.apiKey || left.proxyUrl !== right.proxyUrl) return false;
+    if (!areKeyValueEntriesEqual(left.headers, right.headers)) return false;
+  }
+  return true;
+};
 
 export function AiProvidersOpenAIEditLayout() {
   const { t } = useTranslation();
@@ -132,6 +148,7 @@ export function AiProvidersOpenAIEditLayout() {
 
   const config = useConfigStore((state) => state.config);
   const fetchConfig = useConfigStore((state) => state.fetchConfig);
+  const updateConfigValue = useConfigStore((state) => state.updateConfigValue);
   const isCacheValid = useConfigStore((state) => state.isCacheValid);
 
   const [providers, setProviders] = useState<OpenAIProviderConfig[]>(
@@ -152,7 +169,7 @@ export function AiProvidersOpenAIEditLayout() {
   const acquireDraft = useOpenAIEditDraftStore((state) => state.acquireDraft);
   const releaseDraft = useOpenAIEditDraftStore((state) => state.releaseDraft);
   const initDraft = useOpenAIEditDraftStore((state) => state.initDraft);
-  const setDraftBaselineSignature = useOpenAIEditDraftStore((state) => state.setDraftBaselineSignature);
+  const setDraftBaseline = useOpenAIEditDraftStore((state) => state.setDraftBaseline);
   const setDraftForm = useOpenAIEditDraftStore((state) => state.setDraftForm);
   const setDraftTestModel = useOpenAIEditDraftStore((state) => state.setDraftTestModel);
   const setDraftTestStatus = useOpenAIEditDraftStore((state) => state.setDraftTestStatus);
@@ -242,15 +259,25 @@ export function AiProvidersOpenAIEditLayout() {
       setLoading(true);
     }
 
-    fetchConfig('openai-compatibility')
+    providersApi
+      .getOpenAIProviders()
       .then((value) => {
         if (cancelled) return;
-        setProviders(Array.isArray(value) ? (value as OpenAIProviderConfig[]) : []);
+        const nextProviders = value || [];
+        setProviders(nextProviders);
+        updateConfigValue('openai-compatibility', nextProviders);
       })
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
         if (cancelled) return;
-        const message = getErrorMessage(err) || t('notification.refresh_failed');
-        showNotification(`${t('notification.load_failed')}: ${message}`, 'error');
+        try {
+          const fallback = await fetchConfig('openai-compatibility');
+          if (cancelled) return;
+          setProviders(Array.isArray(fallback) ? (fallback as OpenAIProviderConfig[]) : []);
+        } catch {
+          if (cancelled) return;
+          const message = getErrorMessage(err) || t('notification.refresh_failed');
+          showNotification(`${t('notification.load_failed')}: ${message}`, 'error');
+        }
       })
       .finally(() => {
         if (cancelled) return;
@@ -260,7 +287,7 @@ export function AiProvidersOpenAIEditLayout() {
     return () => {
       cancelled = true;
     };
-  }, [fetchConfig, isCacheValid, showNotification, t]);
+  }, [fetchConfig, isCacheValid, showNotification, t, updateConfigValue]);
 
   useEffect(() => {
     if (loading) return;
@@ -286,9 +313,9 @@ export function AiProvidersOpenAIEditLayout() {
         initialData.testModel && available.includes(initialData.testModel)
           ? initialData.testModel
           : available[0] || '';
-      const baselineSignature = buildOpenAISignature(seededForm, initialTestModel);
+      const baseline = buildOpenAIBaseline(seededForm, initialTestModel);
       initDraft(draftKey, {
-        baselineSignature,
+        baseline,
         form: seededForm,
         testModel: initialTestModel,
         testStatus: 'idle',
@@ -298,7 +325,7 @@ export function AiProvidersOpenAIEditLayout() {
     } else {
       const emptyForm = buildEmptyForm();
       initDraft(draftKey, {
-        baselineSignature: buildOpenAISignature(emptyForm, ''),
+        baseline: buildOpenAIBaseline(emptyForm, ''),
         form: emptyForm,
         testModel: '',
         testStatus: 'idle',
@@ -362,9 +389,45 @@ export function AiProvidersOpenAIEditLayout() {
   );
 
   const resolvedLoading = !draft?.initialized;
-  const currentSignature = useMemo(() => buildOpenAISignature(form, testModel), [form, testModel]);
-  const baselineSignature = draft?.baselineSignature ?? '';
-  const isDirty = Boolean(draft?.initialized) && baselineSignature !== currentSignature;
+  const baseline = draft?.baseline ?? null;
+  const normalizedHeaders = useMemo(() => normalizeHeaderEntries(form.headers), [form.headers]);
+  const normalizedModels = useMemo(
+    () => normalizeModelEntries(form.modelEntries),
+    [form.modelEntries]
+  );
+  const normalizedApiKeyEntries = useMemo(
+    () => normalizeApiKeyEntries(form.apiKeyEntries),
+    [form.apiKeyEntries]
+  );
+  const normalizedPriority = useMemo(() => {
+    return form.priority !== undefined && Number.isFinite(form.priority)
+      ? Math.trunc(form.priority)
+      : null;
+  }, [form.priority]);
+  const normalizedTestModel = useMemo(() => String(testModel ?? '').trim(), [testModel]);
+  const isHeadersDirty = useMemo(() => {
+    if (!baseline) return false;
+    return !areKeyValueEntriesEqual(baseline.headers, normalizedHeaders);
+  }, [baseline, normalizedHeaders]);
+  const isModelsDirty = useMemo(() => {
+    if (!baseline) return false;
+    return !areModelEntriesEqual(baseline.models, normalizedModels);
+  }, [baseline, normalizedModels]);
+  const isApiKeyEntriesDirty = useMemo(() => {
+    if (!baseline) return false;
+    return !areNormalizedApiKeyEntriesEqual(baseline.apiKeyEntries, normalizedApiKeyEntries);
+  }, [baseline, normalizedApiKeyEntries]);
+  const isDirty =
+    Boolean(draft?.initialized) &&
+    baseline !== null &&
+    (baseline.name !== form.name.trim() ||
+      baseline.priority !== normalizedPriority ||
+      baseline.prefix !== form.prefix.trim() ||
+      baseline.baseUrl !== form.baseUrl.trim() ||
+      baseline.testModel !== normalizedTestModel ||
+      isHeadersDirty ||
+      isApiKeyEntriesDirty ||
+      isModelsDirty);
   const editorRootPath = useMemo(() => {
     if (hasIndexParam) {
       return `/ai-providers/openai/${params.index ?? ''}`;
@@ -415,6 +478,9 @@ export function AiProvidersOpenAIEditLayout() {
       if (form.priority !== undefined && Number.isFinite(form.priority)) {
         payload.priority = Math.trunc(form.priority);
       }
+      if (initialData?.disabled !== undefined) {
+        payload.disabled = initialData.disabled;
+      }
       const resolvedTestModel = testModel.trim();
       if (resolvedTestModel) payload.testModel = resolvedTestModel;
       const models = entriesToModels(form.modelEntries);
@@ -429,15 +495,13 @@ export function AiProvidersOpenAIEditLayout() {
 
       let syncedProviders = nextList;
       try {
-        const latest = await fetchConfig('openai-compatibility', true);
-        if (Array.isArray(latest)) {
-          syncedProviders = latest as OpenAIProviderConfig[];
-        }
+        syncedProviders = await providersApi.getOpenAIProviders();
       } catch {
         // 保存成功后刷新失败时，回退到本地计算结果，避免页面数据为空或回退
       }
 
       setProviders(syncedProviders);
+      updateConfigValue('openai-compatibility', syncedProviders);
       showNotification(
         editIndex !== null
           ? t('notification.openai_provider_updated')
@@ -445,7 +509,7 @@ export function AiProvidersOpenAIEditLayout() {
         'success'
       );
       allowNextNavigation();
-      setDraftBaselineSignature(draftKey, buildOpenAISignature(form, testModel));
+      setDraftBaseline(draftKey, buildOpenAIBaseline(form, testModel));
       handleBack();
     } catch (err: unknown) {
       showNotification(`${t('notification.update_failed')}: ${getErrorMessage(err)}`, 'error');
@@ -456,14 +520,15 @@ export function AiProvidersOpenAIEditLayout() {
     allowNextNavigation,
     draftKey,
     editIndex,
-    fetchConfig,
     form,
     handleBack,
+    initialData?.disabled,
     providers,
-    setDraftBaselineSignature,
+    setDraftBaseline,
     showNotification,
     t,
     testModel,
+    updateConfigValue,
   ]);
 
   return (

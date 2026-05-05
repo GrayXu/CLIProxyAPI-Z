@@ -1,26 +1,30 @@
 import { useMemo } from 'react';
 import type { AuthFileItem } from '@/types';
-import { calculateStatusBarData, normalizeAuthIndex, type UsageDetail } from '@/utils/usage';
+import {
+  normalizeRecentRequestAuthIndex,
+  normalizeRecentRequestBuckets,
+  statusBarDataFromRecentRequests,
+} from '@/utils/recentRequests';
 
-export type AuthFileStatusBarData = ReturnType<typeof calculateStatusBarData>;
+export type AuthFileStatusBarData = ReturnType<typeof statusBarDataFromRecentRequests>;
 
-export function useAuthFilesStatusBarCache(files: AuthFileItem[], usageDetails: UsageDetail[]) {
+export function useAuthFilesStatusBarCache(files: AuthFileItem[]) {
   return useMemo(() => {
     const cache = new Map<string, AuthFileStatusBarData>();
 
     files.forEach((file) => {
       const rawAuthIndex = file['auth_index'] ?? file.authIndex;
-      const authIndexKey = normalizeAuthIndex(rawAuthIndex);
+      const authIndexKey = normalizeRecentRequestAuthIndex(rawAuthIndex);
+      if (!authIndexKey) return;
 
-      if (authIndexKey) {
-        const filteredDetails = usageDetails.filter((detail) => {
-          const detailAuthIndex = normalizeAuthIndex(detail.auth_index);
-          return detailAuthIndex !== null && detailAuthIndex === authIndexKey;
-        });
-        cache.set(authIndexKey, calculateStatusBarData(filteredDetails));
-      }
+      cache.set(
+        authIndexKey,
+        statusBarDataFromRecentRequests(
+          normalizeRecentRequestBuckets(file.recent_requests ?? file.recentRequests)
+        )
+      );
     });
 
     return cache;
-  }, [files, usageDetails]);
+  }, [files]);
 }

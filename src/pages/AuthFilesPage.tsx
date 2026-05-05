@@ -48,12 +48,13 @@ import { useAuthFilesData } from '@/features/authFiles/hooks/useAuthFilesData';
 import { useAuthFilesModels } from '@/features/authFiles/hooks/useAuthFilesModels';
 import { useAuthFilesOauth } from '@/features/authFiles/hooks/useAuthFilesOauth';
 import { useAuthFilesPrefixProxyEditor } from '@/features/authFiles/hooks/useAuthFilesPrefixProxyEditor';
-import { useAuthFilesStats } from '@/features/authFiles/hooks/useAuthFilesStats';
 import { useAuthFilesStatusBarCache } from '@/features/authFiles/hooks/useAuthFilesStatusBarCache';
 import {
   isAuthFilesSortMode,
   readAuthFilesUiState,
+  readPersistedAuthFilesCompactMode,
   writeAuthFilesUiState,
+  writePersistedAuthFilesCompactMode,
   type AuthFilesSortMode,
 } from '@/features/authFiles/uiState';
 import { useAuthStore, useNotificationStore, useThemeStore } from '@/stores';
@@ -66,6 +67,15 @@ const BATCH_BAR_HIDDEN_TRANSFORM = 'translateX(-50%) translateY(56px)';
 const DEFAULT_REGULAR_PAGE_SIZE = 9;
 const DEFAULT_COMPACT_PAGE_SIZE = 12;
 
+const escapeWildcardSearchSegment = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const buildWildcardSearch = (value: string): RegExp | null => {
+  if (!value.includes('*')) return null;
+  const pattern = value.split('*').map(escapeWildcardSearchSegment).join('.*');
+  return new RegExp(pattern, 'i');
+};
+
 export function AuthFilesPage() {
   const { t } = useTranslation();
   const showNotification = useNotificationStore((state) => state.showNotification);
@@ -77,6 +87,7 @@ export function AuthFilesPage() {
 
   const [filter, setFilter] = useState<'all' | string>('all');
   const [problemOnly, setProblemOnly] = useState(false);
+  const [disabledOnly, setDisabledOnly] = useState(false);
   const [compactMode, setCompactMode] = useState(false);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -88,12 +99,12 @@ export function AuthFilesPage() {
   const [viewMode, setViewMode] = useState<'diagram' | 'list'>('list');
   const [sortMode, setSortMode] = useState<AuthFilesSortMode>('default');
   const [batchActionBarVisible, setBatchActionBarVisible] = useState(false);
+  const [uiStateHydrated, setUiStateHydrated] = useState(false);
   const floatingBatchActionsRef = useRef<HTMLDivElement>(null);
   const batchActionAnimationRef = useRef<AnimationPlaybackControlsWithThen | null>(null);
   const previousSelectionCountRef = useRef(0);
   const selectionCountRef = useRef(0);
 
-  const { keyStats, usageDetails, loadKeyStats, refreshKeyStats } = useAuthFilesStats();
   const {
     files,
     selectedFiles,
@@ -120,9 +131,9 @@ export function AuthFilesPage() {
     batchDownload,
     batchSetStatus,
     batchDelete,
-  } = useAuthFilesData({ refreshKeyStats });
+  } = useAuthFilesData();
 
-  const statusBarCache = useAuthFilesStatusBarCache(files, usageDetails);
+  const statusBarCache = useAuthFilesStatusBarCache(files);
 
   const {
     excluded,
@@ -163,7 +174,6 @@ export function AuthFilesPage() {
   } = useAuthFilesPrefixProxyEditor({
     disableControls: connectionStatus !== 'connected',
     loadFiles,
-    loadKeyStats: refreshKeyStats,
   });
 
   const disableControls = connectionStatus !== 'connected';
@@ -176,49 +186,65 @@ export function AuthFilesPage() {
   const pageSize = compactMode ? pageSizeByMode.compact : pageSizeByMode.regular;
 
   useEffect(() => {
-    const persisted = readAuthFilesUiState();
-    if (!persisted) return;
+    const persistedCompactMode = readPersistedAuthFilesCompactMode();
+    if (typeof persistedCompactMode === 'boolean') {
+      setCompactMode(persistedCompactMode);
+    }
 
-    if (typeof persisted.filter === 'string' && persisted.filter.trim()) {
-      setFilter(persisted.filter);
+    const persisted = readAuthFilesUiState();
+    if (persisted) {
+      if (typeof persisted.filter === 'string' && persisted.filter.trim()) {
+        setFilter(persisted.filter);
+      }
+      if (typeof persisted.problemOnly === 'boolean') {
+        setProblemOnly(persisted.problemOnly);
+      }
+      if (typeof persisted.disabledOnly === 'boolean') {
+        setDisabledOnly(persisted.disabledOnly);
+      }
+      if (
+        typeof persistedCompactMode !== 'boolean' &&
+        typeof persisted.compactMode === 'boolean'
+      ) {
+        setCompactMode(persisted.compactMode);
+      }
+      if (typeof persisted.search === 'string') {
+        setSearch(persisted.search);
+      }
+      if (typeof persisted.page === 'number' && Number.isFinite(persisted.page)) {
+        setPage(Math.max(1, Math.round(persisted.page)));
+      }
+      const legacyPageSize =
+        typeof persisted.pageSize === 'number' && Number.isFinite(persisted.pageSize)
+          ? clampCardPageSize(persisted.pageSize)
+          : null;
+      const regularPageSize =
+        typeof persisted.regularPageSize === 'number' && Number.isFinite(persisted.regularPageSize)
+          ? clampCardPageSize(persisted.regularPageSize)
+          : legacyPageSize ?? DEFAULT_REGULAR_PAGE_SIZE;
+      const compactPageSize =
+        typeof persisted.compactPageSize === 'number' && Number.isFinite(persisted.compactPageSize)
+          ? clampCardPageSize(persisted.compactPageSize)
+          : legacyPageSize ?? DEFAULT_COMPACT_PAGE_SIZE;
+      setPageSizeByMode({
+        regular: regularPageSize,
+        compact: compactPageSize,
+      });
+      if (isAuthFilesSortMode(persisted.sortMode)) {
+        setSortMode(persisted.sortMode);
+      }
     }
-    if (typeof persisted.problemOnly === 'boolean') {
-      setProblemOnly(persisted.problemOnly);
-    }
-    if (typeof persisted.compactMode === 'boolean') {
-      setCompactMode(persisted.compactMode);
-    }
-    if (typeof persisted.search === 'string') {
-      setSearch(persisted.search);
-    }
-    if (typeof persisted.page === 'number' && Number.isFinite(persisted.page)) {
-      setPage(Math.max(1, Math.round(persisted.page)));
-    }
-    const legacyPageSize =
-      typeof persisted.pageSize === 'number' && Number.isFinite(persisted.pageSize)
-        ? clampCardPageSize(persisted.pageSize)
-        : null;
-    const regularPageSize =
-      typeof persisted.regularPageSize === 'number' && Number.isFinite(persisted.regularPageSize)
-        ? clampCardPageSize(persisted.regularPageSize)
-        : legacyPageSize ?? DEFAULT_REGULAR_PAGE_SIZE;
-    const compactPageSize =
-      typeof persisted.compactPageSize === 'number' && Number.isFinite(persisted.compactPageSize)
-        ? clampCardPageSize(persisted.compactPageSize)
-        : legacyPageSize ?? DEFAULT_COMPACT_PAGE_SIZE;
-    setPageSizeByMode({
-      regular: regularPageSize,
-      compact: compactPageSize,
-    });
-    if (isAuthFilesSortMode(persisted.sortMode)) {
-      setSortMode(persisted.sortMode);
-    }
+
+    setUiStateHydrated(true);
   }, []);
 
   useEffect(() => {
+    if (!uiStateHydrated) return;
+
     writeAuthFilesUiState({
       filter,
       problemOnly,
+      disabledOnly,
       compactMode,
       search,
       page,
@@ -227,7 +253,19 @@ export function AuthFilesPage() {
       compactPageSize: pageSizeByMode.compact,
       sortMode,
     });
-  }, [filter, problemOnly, compactMode, search, page, pageSize, pageSizeByMode, sortMode]);
+    writePersistedAuthFilesCompactMode(compactMode);
+  }, [
+    compactMode,
+    disabledOnly,
+    filter,
+    page,
+    pageSize,
+    pageSizeByMode,
+    problemOnly,
+    search,
+    sortMode,
+    uiStateHydrated,
+  ]);
 
   useEffect(() => {
     setPageSizeInput(String(pageSize));
@@ -289,22 +327,21 @@ export function AuthFilesPage() {
   );
 
   const handleHeaderRefresh = useCallback(async () => {
-    await Promise.all([loadFiles(), refreshKeyStats(), loadExcluded(), loadModelAlias()]);
-  }, [loadFiles, refreshKeyStats, loadExcluded, loadModelAlias]);
+    await Promise.all([loadFiles(), loadExcluded(), loadModelAlias()]);
+  }, [loadFiles, loadExcluded, loadModelAlias]);
 
   useHeaderRefresh(handleHeaderRefresh);
 
   useEffect(() => {
     if (!isCurrentLayer) return;
     loadFiles();
-    void loadKeyStats().catch(() => {});
     loadExcluded();
     loadModelAlias();
-  }, [isCurrentLayer, loadFiles, loadKeyStats, loadExcluded, loadModelAlias]);
+  }, [isCurrentLayer, loadFiles, loadExcluded, loadModelAlias]);
 
   useInterval(
     () => {
-      void refreshKeyStats().catch(() => {});
+      void loadFiles().catch(() => {});
     },
     isCurrentLayer ? 240_000 : null
   );
@@ -319,9 +356,14 @@ export function AuthFilesPage() {
     return Array.from(types);
   }, [files]);
 
-  const filesMatchingProblemFilter = useMemo(
-    () => (problemOnly ? files.filter(hasAuthFileStatusMessage) : files),
-    [files, problemOnly]
+  const filesMatchingStatusFilters = useMemo(
+    () =>
+      files.filter((file) => {
+        if (problemOnly && !hasAuthFileStatusMessage(file)) return false;
+        if (disabledOnly && file.disabled !== true) return false;
+        return true;
+      }),
+    [disabledOnly, files, problemOnly]
   );
 
   const sortOptions = useMemo(
@@ -334,31 +376,33 @@ export function AuthFilesPage() {
   );
 
   const typeCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: filesMatchingProblemFilter.length };
-    filesMatchingProblemFilter.forEach((file) => {
+    const counts: Record<string, number> = { all: filesMatchingStatusFilters.length };
+    filesMatchingStatusFilters.forEach((file) => {
       if (!file.type) return;
       counts[file.type] = (counts[file.type] || 0) + 1;
     });
     return counts;
-  }, [filesMatchingProblemFilter]);
+  }, [filesMatchingStatusFilters]);
 
-  const activeFilterLabel =
-    filter === 'all' ? t('auth_files.filter_all') : getTypeLabel(t, String(filter));
-  const activeFilterCount = typeCounts[String(filter)] ?? 0;
-  const activeFilterIcon = getAuthFileIcon(String(filter), resolvedTheme);
+  const normalizedSearch = search.trim();
+  const wildcardSearch = useMemo(() => buildWildcardSearch(normalizedSearch), [normalizedSearch]);
 
   const filtered = useMemo(() => {
-    return filesMatchingProblemFilter.filter((item) => {
+    const normalizedTerm = normalizedSearch.toLowerCase();
+
+    return filesMatchingStatusFilters.filter((item) => {
       const matchType = filter === 'all' || item.type === filter;
-      const term = search.trim().toLowerCase();
       const matchSearch =
-        !term ||
-        item.name.toLowerCase().includes(term) ||
-        (item.type || '').toString().toLowerCase().includes(term) ||
-        (item.provider || '').toString().toLowerCase().includes(term);
+        !normalizedSearch ||
+        [item.name, item.type, item.provider].some((value) => {
+          const content = (value || '').toString();
+          return wildcardSearch
+            ? wildcardSearch.test(content)
+            : content.toLowerCase().includes(normalizedTerm);
+        });
       return matchType && matchSearch;
     });
-  }, [filesMatchingProblemFilter, filter, search]);
+  }, [filesMatchingStatusFilters, filter, normalizedSearch, wildcardSearch]);
 
   const sorted = useMemo(() => {
     const copy = [...filtered];
@@ -539,42 +583,7 @@ export function AuthFilesPage() {
   );
 
   const renderFilterTags = () => (
-    <aside className={styles.filterRail}>
-      <div className={styles.filterRailHeader}>
-        <span className={styles.filterRailEyebrow}>
-          {t('nav.ai_providers', { defaultValue: 'Providers' })}
-        </span>
-        <div className={styles.filterRailHero}>
-          <div className={styles.filterRailHeroTitle}>
-            {filter === 'all' ? (
-              <span className={`${styles.filterRailHeroIcon} ${styles.filterAllIconWrap}`}>
-                <IconFilterAll className={styles.filterAllIcon} size={22} />
-              </span>
-            ) : (
-              <div className={styles.filterRailHeroIcon}>
-                {activeFilterIcon ? (
-                  <img src={activeFilterIcon} alt="" className={styles.filterRailHeroIconImage} />
-                ) : (
-                  <span className={styles.filterRailHeroIconFallback}>
-                    {activeFilterLabel.slice(0, 1).toUpperCase()}
-                  </span>
-                )}
-              </div>
-            )}
-            <div className={styles.filterRailHeroText}>
-              <span className={styles.filterRailTitle}>{activeFilterLabel}</span>
-              <span className={styles.filterRailDescription}>{t('auth_files.title_section')}</span>
-            </div>
-          </div>
-          <div className={styles.filterRailMeta}>
-            <span className={styles.filterRailCount}>{activeFilterCount}</span>
-            {problemOnly && (
-              <span className={styles.filterRailMode}>{t('auth_files.problem_filter_only')}</span>
-            )}
-          </div>
-        </div>
-      </div>
-
+    <div className={styles.filterRail}>
       <div className={styles.filterTags}>
         {existingTypes.map((type) => {
           const isActive = filter === type;
@@ -602,7 +611,7 @@ export function AuthFilesPage() {
               <span className={styles.filterTagLabel}>
                 {type === 'all' ? (
                   <span className={`${styles.filterTagIconWrap} ${styles.filterAllIconWrap}`}>
-                    <IconFilterAll className={styles.filterAllIcon} size={18} />
+                    <IconFilterAll className={styles.filterAllIcon} size={16} />
                   </span>
                 ) : (
                   <span className={styles.filterTagIconWrap}>
@@ -622,7 +631,7 @@ export function AuthFilesPage() {
           );
         })}
       </div>
-    </aside>
+    </div>
   );
 
   const titleNode = (
@@ -632,13 +641,19 @@ export function AuthFilesPage() {
     </div>
   );
 
-  const deleteAllButtonLabel = problemOnly
-    ? filter === 'all'
-      ? t('auth_files.delete_problem_button')
-      : t('auth_files.delete_problem_button_with_type', { type: getTypeLabel(t, filter) })
-    : filter === 'all'
+  const deleteAllButtonLabel = (() => {
+    if (disabledOnly) {
+      return t('auth_files.delete_filtered_result_button');
+    }
+    if (problemOnly) {
+      return filter === 'all'
+        ? t('auth_files.delete_problem_button')
+        : t('auth_files.delete_problem_button_with_type', { type: getTypeLabel(t, filter) });
+    }
+    return filter === 'all'
       ? t('auth_files.delete_all_button')
       : `${t('common.delete')} ${getTypeLabel(t, filter)}`;
+  })();
 
   return (
     <div className={styles.container}>
@@ -669,8 +684,10 @@ export function AuthFilesPage() {
                 handleDeleteAll({
                   filter,
                   problemOnly,
+                  disabledOnly,
                   onResetFilterToAll: () => setFilter('all'),
                   onResetProblemOnly: () => setProblemOnly(false),
+                  onResetDisabledOnly: () => setDisabledOnly(false),
                 })
               }
               disabled={disableControls || loading || deletingAll}
@@ -757,6 +774,21 @@ export function AuthFilesPage() {
                     </div>
                     <div className={styles.filterToggleCard}>
                       <ToggleSwitch
+                        checked={disabledOnly}
+                        onChange={(value) => {
+                          setDisabledOnly(value);
+                          setPage(1);
+                        }}
+                        ariaLabel={t('auth_files.disabled_filter_only')}
+                        label={
+                          <span className={styles.filterToggleLabel}>
+                            {t('auth_files.disabled_filter_only')}
+                          </span>
+                        }
+                      />
+                    </div>
+                    <div className={styles.filterToggleCard}>
+                      <ToggleSwitch
                         checked={compactMode}
                         onChange={(value) => setCompactMode(value)}
                         ariaLabel={t('auth_files.compact_mode_label')}
@@ -794,7 +826,6 @@ export function AuthFilesPage() {
                     deleting={deleting}
                     statusUpdating={statusUpdating}
                     quotaFilterType={quotaFilterType}
-                    keyStats={keyStats}
                     statusBarCache={statusBarCache}
                     onShowModels={showModels}
                     onDownload={handleDownload}

@@ -6,21 +6,21 @@ import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import iconGemini from '@/assets/icons/gemini.svg';
 import type { GeminiKeyConfig } from '@/types';
 import { maskApiKey } from '@/utils/format';
-import {
-  buildCandidateUsageSourceIds,
-  calculateStatusBarData,
-  type KeyStats,
-  type UsageDetail,
-} from '@/utils/usage';
+import { statusBarDataFromRecentRequests } from '@/utils/recentRequests';
 import styles from '@/pages/AiProvidersPage.module.scss';
 import { ProviderList } from '../ProviderList';
 import { ProviderStatusBar } from '../ProviderStatusBar';
-import { getStatsBySource, hasDisableAllModelsRule } from '../utils';
+import {
+  getProviderConfigKey,
+  getProviderRecentBuckets,
+  getProviderTotalStats,
+  hasDisableAllModelsRule,
+  type ProviderRecentUsageMap,
+} from '../utils';
 
 interface GeminiSectionProps {
   configs: GeminiKeyConfig[];
-  keyStats: KeyStats;
-  usageDetails: UsageDetail[];
+  usageByProvider: ProviderRecentUsageMap;
   loading: boolean;
   disableControls: boolean;
   isSwitching: boolean;
@@ -32,8 +32,7 @@ interface GeminiSectionProps {
 
 export function GeminiSection({
   configs,
-  keyStats,
-  usageDetails,
+  usageByProvider,
   loading,
   disableControls,
   isSwitching,
@@ -47,22 +46,21 @@ export function GeminiSection({
   const toggleDisabled = disableControls || loading || isSwitching;
 
   const statusBarCache = useMemo(() => {
-    const cache = new Map<string, ReturnType<typeof calculateStatusBarData>>();
+    const cache = new Map<string, ReturnType<typeof statusBarDataFromRecentRequests>>();
 
-    configs.forEach((config) => {
+    configs.forEach((config, index) => {
       if (!config.apiKey) return;
-      const candidates = buildCandidateUsageSourceIds({
-        apiKey: config.apiKey,
-        prefix: config.prefix,
-      });
-      if (!candidates.length) return;
-      const candidateSet = new Set(candidates);
-      const filteredDetails = usageDetails.filter((detail) => candidateSet.has(detail.source));
-      cache.set(config.apiKey, calculateStatusBarData(filteredDetails));
+      const configKey = getProviderConfigKey(config, index);
+      cache.set(
+        configKey,
+        statusBarDataFromRecentRequests(
+          getProviderRecentBuckets(usageByProvider, 'gemini', config.apiKey, config.baseUrl)
+        )
+      );
     });
 
     return cache;
-  }, [configs, usageDetails]);
+  }, [configs, usageByProvider]);
 
   return (
     <>
@@ -82,11 +80,11 @@ export function GeminiSection({
         <ProviderList<GeminiKeyConfig>
           items={configs}
           loading={loading}
-          keyField={(item) => item.apiKey}
+          keyField={(item, index) => getProviderConfigKey(item, index)}
           emptyTitle={t('ai_providers.gemini_empty_title')}
           emptyDescription={t('ai_providers.gemini_empty_desc')}
-          onEdit={onEdit}
-          onDelete={onDelete}
+          onEdit={(_, index) => onEdit(index)}
+          onDelete={(_, index) => onDelete(index)}
           actionsDisabled={actionsDisabled}
           getRowDisabled={(item) => hasDisableAllModelsRule(item.excludedModels)}
           renderExtraActions={(item, index) => (
@@ -98,11 +96,18 @@ export function GeminiSection({
             />
           )}
           renderContent={(item, index) => {
-            const stats = getStatsBySource(item.apiKey, keyStats, item.prefix);
+            const stats = getProviderTotalStats(
+              usageByProvider,
+              'gemini',
+              item.apiKey,
+              item.baseUrl
+            );
             const headerEntries = Object.entries(item.headers || {});
             const configDisabled = hasDisableAllModelsRule(item.excludedModels);
             const excludedModels = item.excludedModels ?? [];
-            const statusData = statusBarCache.get(item.apiKey) || calculateStatusBarData([]);
+            const statusData =
+              statusBarCache.get(getProviderConfigKey(item, index)) ||
+              statusBarDataFromRecentRequests([]);
 
             return (
               <Fragment>
