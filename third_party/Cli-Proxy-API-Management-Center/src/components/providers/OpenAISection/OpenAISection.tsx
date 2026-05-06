@@ -91,8 +91,8 @@ export function OpenAISection({
           keyField={(item, index) => getOpenAIProviderKey(item, index)}
           emptyTitle={t('ai_providers.openai_empty_title')}
           emptyDescription={t('ai_providers.openai_empty_desc')}
-          onEdit={onEdit}
-          onDelete={onDelete}
+          onEdit={(_, index) => onEdit(index)}
+          onDelete={(_, index) => onDelete(index)}
           actionsDisabled={actionsDisabled}
           renderContent={(item, index) => {
             const headerEntries = Object.entries(item.headers || {});
