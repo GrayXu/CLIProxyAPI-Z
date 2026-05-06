@@ -81,6 +81,181 @@
   background: transparent;
   border: 0;
 
+  .left {
+    position: absolute;
+    top: var(--shell-gutter);
+    left: calc(var(--shell-gutter) + var(--sidebar-active-width) + 22px);
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(
+      520px,
+      calc(100vw - var(--shell-gutter) - var(--shell-gutter) - var(--sidebar-active-width) - 282px)
+    );
+    min-width: 0;
+    height: 44px;
+    padding: 5px 12px 5px 6px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 68%, transparent);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--bg-primary) 68%, transparent);
+    color: var(--text-primary);
+    box-shadow:
+      0 18px 44px rgb(0 0 0 / 0.17),
+      inset 0 1px 0 rgb(255 255 255 / 0.04);
+    --glass-blur: 16px;
+    backdrop-filter: var(--glass-backdrop-filter);
+    -webkit-backdrop-filter: var(--glass-backdrop-filter);
+    pointer-events: auto;
+    transition:
+      left $transition-normal,
+      max-width $transition-normal;
+  }
+
+  .sidebar-toggle-header {
+    width: var(--floating-control-size);
+    height: var(--floating-control-size);
+    min-width: var(--floating-control-size);
+    padding: 0;
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition:
+      background $transition-fast,
+      color $transition-fast,
+      transform $transition-fast;
+
+    &:hover {
+      background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+      color: var(--text-primary);
+      transform: translateY(-1px);
+    }
+
+    &:active {
+      transform: translateY(0);
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 26%, transparent);
+    }
+  }
+
+  .brand-logo {
+    width: 34px;
+    height: 34px;
+    max-width: 34px;
+    max-height: 34px;
+    object-fit: cover;
+    border-radius: 8px;
+    flex: 0 0 34px;
+    display: block;
+  }
+
+  .brand-header {
+    display: inline-flex;
+    align-items: center;
+    gap: $spacing-xs;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 15px;
+    font-weight: 800;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color $transition-fast;
+
+    &:hover {
+      color: var(--primary-color);
+    }
+
+    .brand-full,
+    .brand-abbr {
+      display: inline-block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition:
+        max-width $transition-normal,
+        opacity $transition-normal,
+        transform $transition-normal;
+    }
+
+    .brand-full {
+      max-width: 360px;
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    .brand-abbr {
+      max-width: 0;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(12px);
+    }
+
+    &.collapsed {
+      .brand-full {
+        max-width: 0;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateX(-12px);
+      }
+
+      .brand-abbr {
+        max-width: 120px;
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateX(0);
+      }
+    }
+  }
+
+  .connection {
+    position: absolute;
+    top: var(--shell-gutter);
+    right: calc(var(--shell-gutter) + 210px);
+    display: inline-flex;
+    align-items: center;
+    gap: $spacing-sm;
+    max-width: min(360px, calc(100vw - var(--shell-gutter) * 2 - 640px));
+    height: 44px;
+    padding: 6px 12px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 68%, transparent);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--bg-primary) 60%, transparent);
+    color: var(--text-secondary);
+    box-shadow:
+      0 18px 44px rgb(0 0 0 / 0.12),
+      inset 0 1px 0 rgb(255 255 255 / 0.04);
+    --glass-blur: 16px;
+    backdrop-filter: var(--glass-backdrop-filter);
+    -webkit-backdrop-filter: var(--glass-backdrop-filter);
+    pointer-events: auto;
+    overflow: hidden;
+
+    .status-badge {
+      flex-shrink: 0;
+      margin-bottom: 0;
+      white-space: nowrap;
+    }
+
+    .base {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--text-primary);
+      font-size: 13px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   .sidebar-toggle-floating {
     position: absolute;
     top: var(--shell-gutter);
@@ -604,6 +779,11 @@
   }
 
   .main-header {
+    .left,
+    .connection {
+      display: none;
+    }
+
     .sidebar-toggle-floating {
       display: none;
     }
