@@ -204,6 +204,46 @@ func TestRedisProtocol_ManagementDisabled_RejectsConnection(t *testing.T) {
 	}
 }
 
+func TestProtocolMultiplexer_IdleConnectionDoesNotBlockRedisConnection(t *testing.T) {
+	const managementPassword = "test-management-password"
+
+	t.Setenv("MANAGEMENT_PASSWORD", managementPassword)
+	redisqueue.SetEnabled(false)
+	t.Cleanup(func() { redisqueue.SetEnabled(false) })
+
+	server := newTestServer(t)
+	if !server.managementRoutesEnabled.Load() {
+		t.Fatalf("expected managementRoutesEnabled to be true")
+	}
+
+	addr, stop := startRedisMuxListener(t, server)
+	t.Cleanup(stop)
+
+	idleConn, errIdle := net.DialTimeout("tcp", addr, time.Second)
+	if errIdle != nil {
+		t.Fatalf("failed to dial idle connection: %v", errIdle)
+	}
+	t.Cleanup(func() { _ = idleConn.Close() })
+
+	activeConn, errActive := net.DialTimeout("tcp", addr, time.Second)
+	if errActive != nil {
+		t.Fatalf("failed to dial active connection: %v", errActive)
+	}
+	t.Cleanup(func() { _ = activeConn.Close() })
+
+	reader := bufio.NewReader(activeConn)
+	_ = activeConn.SetDeadline(time.Now().Add(time.Second))
+
+	if errWrite := writeTestRESPCommand(activeConn, "PING"); errWrite != nil {
+		t.Fatalf("failed to write PING command: %v", errWrite)
+	}
+	if msg, err := readTestRESPError(reader); err != nil {
+		t.Fatalf("failed to read PING NOAUTH error: %v", err)
+	} else if msg != "NOAUTH Authentication required." {
+		t.Fatalf("unexpected PING NOAUTH error: %q", msg)
+	}
+}
+
 func TestRedisProtocol_AUTH_And_PopContracts(t *testing.T) {
 	const managementPassword = "test-management-password"
 
@@ -315,7 +355,7 @@ func TestRedisProtocol_AUTH_And_PopContracts(t *testing.T) {
 	}
 }
 
-func TestRedisProtocol_IPBan_MirrorsManagementPolicy(t *testing.T) {
+func TestRedisProtocol_NoAuthCommandsDoNotTriggerIPBan(t *testing.T) {
 	const managementPassword = "test-management-password"
 
 	t.Setenv("MANAGEMENT_PASSWORD", managementPassword)
@@ -332,7 +372,7 @@ func TestRedisProtocol_IPBan_MirrorsManagementPolicy(t *testing.T) {
 	t.Cleanup(func() { _ = serverConn.Close() })
 
 	fakeRemote := &net.TCPAddr{
-		IP:   net.ParseIP("1.2.3.4"),
+		IP:   net.ParseIP("127.0.0.1"),
 		Port: 1234,
 	}
 	wrappedConn := &remoteAddrConn{Conn: serverConn, remoteAddr: fakeRemote}
@@ -343,25 +383,29 @@ func TestRedisProtocol_IPBan_MirrorsManagementPolicy(t *testing.T) {
 	_ = clientConn.SetDeadline(time.Now().Add(5 * time.Second))
 
 	for i := 0; i < 5; i++ {
-		if errWrite := writeTestRESPCommand(clientConn, "LPOP", "queue"); errWrite != nil {
-			t.Fatalf("failed to write LPOP command: %v", errWrite)
+		cmd := "PING"
+		args := []string{cmd}
+		if i%2 == 1 {
+			cmd = "LPOP"
+			args = []string{cmd, "queue"}
+		}
+		if errWrite := writeTestRESPCommand(clientConn, args...); errWrite != nil {
+			t.Fatalf("failed to write %s command: %v", cmd, errWrite)
 		}
 		if msg, err := readTestRESPError(reader); err != nil {
-			t.Fatalf("failed to read LPOP NOAUTH error: %v", err)
+			t.Fatalf("failed to read %s NOAUTH error: %v", cmd, err)
 		} else if msg != "NOAUTH Authentication required." {
-			t.Fatalf("unexpected LPOP NOAUTH error at attempt %d: %q", i+1, msg)
+			t.Fatalf("unexpected %s NOAUTH error at attempt %d: %q", cmd, i+1, msg)
 		}
 	}
 
-	if errWrite := writeTestRESPCommand(clientConn, "LPOP", "queue"); errWrite != nil {
-		t.Fatalf("failed to write LPOP command after failures: %v", errWrite)
+	if errWrite := writeTestRESPCommand(clientConn, "AUTH", managementPassword); errWrite != nil {
+		t.Fatalf("failed to write AUTH command after NOAUTH probes: %v", errWrite)
 	}
-	msg, err := readTestRESPError(reader)
-	if err != nil {
-		t.Fatalf("failed to read LPOP banned error: %v", err)
-	}
-	if !strings.HasPrefix(msg, "ERR IP banned due to too many failed attempts. Try again in") {
-		t.Fatalf("unexpected LPOP banned error: %q", msg)
+	if msg, err := readTestRESPSimpleString(reader); err != nil {
+		t.Fatalf("failed to read AUTH response: %v", err)
+	} else if msg != "OK" {
+		t.Fatalf("unexpected AUTH response after NOAUTH probes: %q", msg)
 	}
 }
 

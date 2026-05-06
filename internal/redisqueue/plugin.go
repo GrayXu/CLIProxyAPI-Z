@@ -68,12 +68,14 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	}
 
 	detail := requestDetail{
-		Timestamp: timestamp,
-		LatencyMs: record.Latency.Milliseconds(),
-		Source:    record.Source,
-		AuthIndex: record.AuthIndex,
-		Tokens:    tokens,
-		Failed:    failed,
+		Timestamp:         timestamp,
+		LatencyMs:         record.Latency.Milliseconds(),
+		Source:            record.Source,
+		AuthIndex:         record.AuthIndex,
+		Tokens:            tokens,
+		Failed:            failed,
+		ServiceTier:       strings.TrimSpace(record.Detail.ServiceTier),
+		RequestedFastMode: record.Detail.RequestedFastMode,
 	}
 
 	payload, err := json.Marshal(queuedUsageDetail{
@@ -104,12 +106,14 @@ type queuedUsageDetail struct {
 }
 
 type requestDetail struct {
-	Timestamp time.Time  `json:"timestamp"`
-	LatencyMs int64      `json:"latency_ms"`
-	Source    string     `json:"source"`
-	AuthIndex string     `json:"auth_index"`
-	Tokens    tokenStats `json:"tokens"`
-	Failed    bool       `json:"failed"`
+	Timestamp         time.Time  `json:"timestamp"`
+	LatencyMs         int64      `json:"latency_ms"`
+	Source            string     `json:"source"`
+	AuthIndex         string     `json:"auth_index"`
+	Tokens            tokenStats `json:"tokens"`
+	Failed            bool       `json:"failed"`
+	ServiceTier       string     `json:"service_tier,omitempty"`
+	RequestedFastMode bool       `json:"requested_fast_mode,omitempty"`
 }
 
 type tokenStats struct {

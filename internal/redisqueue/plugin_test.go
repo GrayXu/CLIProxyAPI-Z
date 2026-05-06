@@ -32,9 +32,11 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 			RequestedAt: time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC),
 			Latency:     1500 * time.Millisecond,
 			Detail: coreusage.Detail{
-				InputTokens:  10,
-				OutputTokens: 20,
-				TotalTokens:  30,
+				InputTokens:       10,
+				OutputTokens:      20,
+				TotalTokens:       30,
+				ServiceTier:       "priority",
+				RequestedFastMode: true,
 			},
 		})
 
@@ -45,7 +47,9 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 		requireStringField(t, payload, "endpoint", "POST /v1/chat/completions")
 		requireStringField(t, payload, "auth_type", "apikey")
 		requireStringField(t, payload, "request_id", "ctx-request-id")
+		requireStringField(t, payload, "service_tier", "priority")
 		requireBoolField(t, payload, "failed", false)
+		requireBoolField(t, payload, "requested_fast_mode", true)
 	})
 }
 
