@@ -123,9 +123,110 @@ git subtree pull --prefix=third_party/Cli-Proxy-API-Management-Center management
   4. if the UI source changed, commit both the subtree source changes and `internal/managementasset/bundled/management.html` together
   5. if the goal is only to refresh the deployed HTML from already-reviewed subtree source, committing only `internal/managementasset/bundled/management.html` is acceptable
 
+## Upstream Merge, Review, And Deployment Workflow
+
+- For large upstream sync work, use a separate worktree/branch instead of the main working tree. The main worktree may contain Gray's unrelated local changes and must not be dirtied or reset.
+- Default remotes:
+  - `origin`: Gray's fork, target branch `main`
+  - `upstream`: `router-for-me/CLIProxyAPI`, branch `main`
+  - `management-center`: `router-for-me/Cli-Proxy-API-Management-Center`, branch `main`
+- Start by fetching all relevant remotes:
+
+```bash
+git fetch origin main
+git fetch upstream main
+git fetch management-center main
+```
+
+- Merge the Go/backend upstream first, then merge the Management WebUI subtree separately:
+
+```bash
+git merge upstream/main
+git subtree pull --prefix=third_party/Cli-Proxy-API-Management-Center management-center main --squash
+```
+
+- During conflict resolution, preserve this fork's local behavior unless Gray explicitly decides otherwise. In particular, keep:
+  - `quota-sticky` routing strategy in the Management WebUI
+  - usage stats `30d` range
+  - request event fields `requested_fast_mode` and `service_tier`
+  - fast mode status display/export
+  - advanced pricing fields `fast_mode_multiplier` and `input_over_272k`
+  - legacy `/v0/management/usage` behavior
+  - admin/viewer management route split and public issue API key flow
+- After any Management WebUI source change or subtree merge, run `scripts/build-management-html.sh` and commit the WebUI source, `third_party/Cli-Proxy-API-Management-Center/dist/index.html`, and `internal/managementasset/bundled/management.html` together. Avoid ending with a standalone `npm run build`; the final generated artifacts should come from the repo script.
+- Run focused tests for touched packages first, then the broad validation set:
+
+```bash
+go test ./internal/...
+go test ./sdk/...
+go test ./test/...
+go build -o /tmp/cliproxyapi-server-merge-verify ./cmd/server
+scripts/build-management-html.sh
+```
+
+- Before merging into `origin/main`, ask a subagent to review the resolved branch against `origin/main`. The review must explicitly check:
+  - conflict residue and accidental reversions
+  - fork-specific WebUI/usage features listed above
+  - backend behavior introduced by upstream, especially auth, websocket, usage queue, API key usage, and management routes
+  - generated Management WebUI artifacts versus source
+  - missing tests or deployment risks
+- Fix blocking/high review findings before merging. Medium findings that affect fork-specific behavior should normally be fixed in the same merge branch.
+- If Gray asks to merge directly rather than create a PR, create an explicit merge commit on top of `origin/main` and push that to `origin/main`; do not fast-forward the remote silently:
+
+```bash
+git switch -c merge/direct-origin-main-YYYYMMDD origin/main
+git merge --no-ff <resolved-merge-branch>
+git push origin HEAD:main
+```
+
+## Local Deployment Workflow
+
+- The current systemd service is `cliproxyapi.service`.
+- The production binary path is `/usr/local/bin/cliproxyapi`.
+- The service currently runs with:
+
+```text
+ExecStart=/usr/local/bin/cliproxyapi -config /etc/cliproxyapi/config.yaml
+MANAGEMENT_STATIC_PATH=/var/lib/cliproxyapi/static
+```
+
+- For full backend deployment, build with release-style ldflags so `/usr/local/bin/cliproxyapi --version` prints useful metadata:
+
+```bash
+VERSION=$(git describe --tags --dirty --always)
+COMMIT=$(git rev-parse --short HEAD)
+BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+CGO_ENABLED=0 GOOS=linux go build \
+  -ldflags="-s -w -X 'main.Version=${VERSION}' -X 'main.Commit=${COMMIT}' -X 'main.BuildDate=${BUILD_DATE}'" \
+  -o /tmp/cliproxyapi-${COMMIT} ./cmd/server
+```
+
+- Before replacing the production binary or runtime Management HTML, create a timestamped backup under `/var/lib/cliproxyapi/backups/`, for example:
+
+```bash
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+BACKUP_DIR=/var/lib/cliproxyapi/backups/deploy-${TS}
+mkdir -p "$BACKUP_DIR"
+cp -a /usr/local/bin/cliproxyapi "$BACKUP_DIR/cliproxyapi"
+cp -a /var/lib/cliproxyapi/static/management.html "$BACKUP_DIR/management.html"
+```
+
+- Replace the binary with `install -o root -g root -m 0755`, replace runtime Management HTML with `install -o root -g root -m 0644`, then restart and verify:
+
+```bash
+install -o root -g root -m 0755 /tmp/cliproxyapi-${COMMIT} /usr/local/bin/cliproxyapi
+install -o root -g root -m 0644 internal/managementasset/bundled/management.html /var/lib/cliproxyapi/static/management.html
+systemctl restart cliproxyapi.service
+systemctl status cliproxyapi.service --no-pager -l
+journalctl -u cliproxyapi.service -n 80 --no-pager
+```
+
+- For WebUI-only fixes after the backend binary is already deployed, rebuild with `scripts/build-management-html.sh`, commit and push the source/generated artifacts, backup `/var/lib/cliproxyapi/static/management.html`, then replace only that static file. A service restart is not required for a static HTML-only update.
+- Do not edit `/etc/cliproxyapi/config.yaml`, auth files, systemd unit files, or other runtime state during deployment unless Gray explicitly asks.
+
 ## Operations Notes
 
-- `ops/sop.md` documents the current local deploy/update flow for Gray's environment.
+- If `ops/sop.md` exists, it documents the current local deploy/update flow for Gray's environment.
 - Treat `ops/sop.md` as an operational runbook, not a generic development workflow.
 - Do not modify config files, auth files, installed binaries, or systemd units unless the task explicitly requires ops work.
 

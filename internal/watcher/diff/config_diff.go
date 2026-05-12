@@ -54,8 +54,14 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 	if oldCfg.UsageStatisticsStorage.BatchSize != newCfg.UsageStatisticsStorage.BatchSize {
 		changes = append(changes, fmt.Sprintf("usage-statistics-storage.batch-size: %d -> %d", oldCfg.UsageStatisticsStorage.BatchSize, newCfg.UsageStatisticsStorage.BatchSize))
 	}
+	if oldCfg.RedisUsageQueueRetentionSeconds != newCfg.RedisUsageQueueRetentionSeconds {
+		changes = append(changes, fmt.Sprintf("redis-usage-queue-retention-seconds: %d -> %d", oldCfg.RedisUsageQueueRetentionSeconds, newCfg.RedisUsageQueueRetentionSeconds))
+	}
 	if oldCfg.DisableCooling != newCfg.DisableCooling {
 		changes = append(changes, fmt.Sprintf("disable-cooling: %t -> %t", oldCfg.DisableCooling, newCfg.DisableCooling))
+	}
+	if oldCfg.DisableImageGeneration != newCfg.DisableImageGeneration {
+		changes = append(changes, fmt.Sprintf("disable-image-generation: %s -> %s", oldCfg.DisableImageGeneration.String(), newCfg.DisableImageGeneration.String()))
 	}
 	if oldCfg.RequestLog != newCfg.RequestLog {
 		changes = append(changes, fmt.Sprintf("request-log: %t -> %t", oldCfg.RequestLog, newCfg.RequestLog))

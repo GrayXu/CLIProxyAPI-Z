@@ -32,7 +32,7 @@ const attemptCleanupInterval = 1 * time.Hour
 // attemptMaxIdleTime controls how long an IP can be idle before cleanup
 const attemptMaxIdleTime = 2 * time.Hour
 
-const managementMaxFailures = 3
+const managementMaxFailures = 5
 
 const managementBanDuration = 30 * time.Minute
 
@@ -297,6 +297,53 @@ func (h *Handler) clearFailedAttempts(clientIP string) {
 		ai.blockedUntil = time.Time{}
 		ai.lastActivity = time.Now()
 	}
+}
+
+// AuthenticateManagementKey verifies the provided management key for non-HTTP callers.
+// Middleware keeps role assignment in the gin context; this helper mirrors the same
+// key acceptance and ban semantics without mutating a request context.
+func (h *Handler) AuthenticateManagementKey(clientIP string, localClient bool, provided string) (bool, int, string) {
+	if h == nil {
+		return false, http.StatusForbidden, "remote management disabled"
+	}
+
+	cfg := h.cfg
+	var (
+		allowRemote bool
+		secretHash  string
+	)
+	if cfg != nil {
+		allowRemote = cfg.RemoteManagement.AllowRemote
+		secretHash = cfg.RemoteManagement.SecretKey
+	}
+	if h.allowRemoteOverride {
+		allowRemote = true
+	}
+
+	if remaining, blocked := h.blockedForClient(clientIP); blocked {
+		return false, http.StatusForbidden, fmt.Sprintf("IP banned due to too many failed attempts. Try again in %s", remaining)
+	}
+
+	if !localClient && !allowRemote {
+		return false, http.StatusForbidden, "remote management disabled"
+	}
+
+	if secretHash == "" && h.envSecret == "" && strings.TrimSpace(h.localPassword) == "" && !h.hasViewerManagementKeys() {
+		return false, http.StatusForbidden, "remote management key not set"
+	}
+
+	if provided == "" {
+		h.recordFailedAttempt(clientIP)
+		return false, http.StatusUnauthorized, "missing management key"
+	}
+
+	if h.resolveRoleForKey(provided, secretHash, h.envSecret, localClient) == "" {
+		h.recordFailedAttempt(clientIP)
+		return false, http.StatusUnauthorized, "invalid management key"
+	}
+
+	h.clearFailedAttempts(clientIP)
+	return true, 0, ""
 }
 
 func cloneConfigSnapshot(cfg *config.Config) *config.Config {

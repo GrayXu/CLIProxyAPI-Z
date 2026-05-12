@@ -56,6 +56,7 @@ const (
 type pinnedAuthContextKey struct{}
 type selectedAuthCallbackContextKey struct{}
 type executionSessionContextKey struct{}
+type disallowFreeAuthContextKey struct{}
 
 // WithPinnedAuthID returns a child context that requests execution on a specific auth ID.
 func WithPinnedAuthID(ctx context.Context, authID string) context.Context {
@@ -90,6 +91,14 @@ func WithExecutionSessionID(ctx context.Context, sessionID string) context.Conte
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, executionSessionContextKey{}, sessionID)
+}
+
+// WithDisallowFreeAuth returns a child context that asks selection to skip free-tier auths.
+func WithDisallowFreeAuth(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, disallowFreeAuthContextKey{}, true)
 }
 
 // BuildErrorResponseBody builds an OpenAI-compatible JSON error response body.
@@ -190,15 +199,20 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	// Idempotency-Key is an optional client-supplied header used to correlate retries.
 	// Only include it if the client explicitly provides it.
 	key := ""
+	requestPath := ""
 	if ctx != nil {
 		if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
 			key = strings.TrimSpace(ginCtx.GetHeader("Idempotency-Key"))
+			requestPath = strings.TrimSpace(ginCtx.Request.URL.Path)
 		}
 	}
 
 	meta := make(map[string]any)
 	if key != "" {
 		meta[idempotencyKeyMetadataKey] = key
+	}
+	if requestPath != "" {
+		meta[coreexecutor.RequestPathMetadataKey] = requestPath
 	}
 	if stickyKey := stickyConversationKeyFromContext(ctx); stickyKey != "" {
 		meta[coreexecutor.StickyConversationMetadataKey] = stickyKey
@@ -212,7 +226,21 @@ func requestExecutionMetadata(ctx context.Context) map[string]any {
 	if executionSessionID := executionSessionIDFromContext(ctx); executionSessionID != "" {
 		meta[coreexecutor.ExecutionSessionMetadataKey] = executionSessionID
 	}
+	if disallowFreeAuthFromContext(ctx) {
+		meta[coreexecutor.DisallowFreeAuthMetadataKey] = true
+	}
 	return meta
+}
+
+// headersFromContext extracts the original HTTP request headers from the gin context.
+func headersFromContext(ctx context.Context) http.Header {
+	if ctx == nil {
+		return nil
+	}
+	if ginCtx, ok := ctx.Value("gin").(*gin.Context); ok && ginCtx != nil && ginCtx.Request != nil {
+		return ginCtx.Request.Header.Clone()
+	}
+	return nil
 }
 
 func stickyConversationKeyFromContext(ctx context.Context) string {
@@ -268,6 +296,14 @@ func selectedAuthIDCallbackFromContext(ctx context.Context) func(string) {
 		return callback
 	}
 	return nil
+}
+
+func disallowFreeAuthFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(disallowFreeAuthContextKey{}).(bool)
+	return value
 }
 
 func executionSessionIDFromContext(ctx context.Context) string {
@@ -524,6 +560,7 @@ func (h *BaseAPIHandler) ExecuteWithAuthManager(ctx context.Context, handlerType
 	opts := coreexecutor.Options{
 		Stream:          false,
 		Alt:             alt,
+		Headers:         headersFromContext(ctx),
 		OriginalRequest: rawJSON,
 		SourceFormat:    sdktranslator.FromString(handlerType),
 	}
@@ -576,6 +613,7 @@ func (h *BaseAPIHandler) ExecuteCountWithAuthManager(ctx context.Context, handle
 	opts := coreexecutor.Options{
 		Stream:          false,
 		Alt:             alt,
+		Headers:         headersFromContext(ctx),
 		OriginalRequest: rawJSON,
 		SourceFormat:    sdktranslator.FromString(handlerType),
 	}
@@ -632,6 +670,7 @@ func (h *BaseAPIHandler) ExecuteStreamWithAuthManager(ctx context.Context, handl
 	opts := coreexecutor.Options{
 		Stream:          true,
 		Alt:             alt,
+		Headers:         headersFromContext(ctx),
 		OriginalRequest: rawJSON,
 		SourceFormat:    sdktranslator.FromString(handlerType),
 	}

@@ -71,6 +71,11 @@ type Config struct {
 	// UsageStatisticsStorage configures optional durable persistence for usage statistics.
 	UsageStatisticsStorage UsageStatisticsStorageConfig `yaml:"usage-statistics-storage" json:"usage-statistics-storage"`
 
+	// RedisUsageQueueRetentionSeconds controls how long (in seconds) usage queue items
+	// are retained in memory for the Redis RESP interface (LPOP/RPOP).
+	// Default: 60. Max: 3600.
+	RedisUsageQueueRetentionSeconds int `yaml:"redis-usage-queue-retention-seconds" json:"redis-usage-queue-retention-seconds"`
+
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
@@ -542,6 +547,9 @@ type OpenAICompatibility struct {
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 
+	// Disabled prevents this provider from being used for routing.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+
 	// Prefix optionally namespaces model aliases for this provider (e.g., "teamA/kimi-k2").
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 
@@ -630,7 +638,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.UsageStatisticsStorage.Driver = DefaultUsageStatsDriver
 	cfg.UsageStatisticsStorage.FlushIntervalSeconds = DefaultUsageStatsFlushSecs
 	cfg.UsageStatisticsStorage.BatchSize = DefaultUsageStatsBatchSize
+	cfg.RedisUsageQueueRetentionSeconds = 60
 	cfg.DisableCooling = false
+	cfg.DisableImageGeneration = DisableImageGenerationOff
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
 	cfg.AmpCode.RestrictManagementToLocalhost = false // Default to false: API key auth is sufficient
@@ -709,6 +719,12 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	}
 	if cfg.UsageStatisticsStorage.BatchSize <= 0 {
 		cfg.UsageStatisticsStorage.BatchSize = DefaultUsageStatsBatchSize
+	}
+	if cfg.RedisUsageQueueRetentionSeconds <= 0 {
+		cfg.RedisUsageQueueRetentionSeconds = 60
+	} else if cfg.RedisUsageQueueRetentionSeconds > 3600 {
+		log.WithField("value", cfg.RedisUsageQueueRetentionSeconds).Warn("redis-usage-queue-retention-seconds too large; clamping to 3600")
+		cfg.RedisUsageQueueRetentionSeconds = 3600
 	}
 
 	if cfg.MaxRetryCredentials < 0 {

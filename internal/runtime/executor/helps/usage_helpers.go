@@ -18,8 +18,10 @@ import (
 type UsageReporter struct {
 	provider          string
 	model             string
+	alias             string
 	authID            string
 	authIndex         string
+	authType          string
 	apiKey            string
 	source            string
 	requestedAt       time.Time
@@ -32,6 +34,7 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 	reporter := &UsageReporter{
 		provider:    provider,
 		model:       model,
+		alias:       usage.RequestedModelAliasFromContext(ctx),
 		requestedAt: time.Now(),
 		apiKey:      apiKey,
 		source:      resolveUsageSource(auth, apiKey),
@@ -39,6 +42,7 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 	if auth != nil {
 		reporter.authID = auth.ID
 		reporter.authIndex = auth.EnsureIndex()
+		reporter.authType = strings.TrimSpace(auth.Provider)
 	}
 	return reporter
 }
@@ -96,10 +100,12 @@ func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool) usage.Reco
 	return usage.Record{
 		Provider:    r.provider,
 		Model:       r.model,
+		Alias:       r.alias,
 		Source:      r.source,
 		APIKey:      r.apiKey,
 		AuthID:      r.authID,
 		AuthIndex:   r.authIndex,
+		AuthType:    r.authType,
 		RequestedAt: r.requestedAt,
 		Latency:     r.latency(),
 		Failed:      failed,
