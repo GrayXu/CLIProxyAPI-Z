@@ -151,7 +151,7 @@ func selectorForConfig(cfg *config.Config) coreauth.Selector {
 	}
 
 	selector := selectorForRoutingStrategy(cfg.Routing.Strategy)
-	sessionAffinity := cfg.Routing.ClaudeCodeSessionAffinity || cfg.Routing.SessionAffinity
+	sessionAffinity := cfg.Routing.SessionAffinity
 	if !sessionAffinity {
 		return selector
 	}
@@ -552,7 +552,7 @@ func (s *Service) applyConfigUpdate(newCfg *config.Config) {
 	nextStrategy := normalizeRoutingStrategy(newCfg.Routing.Strategy)
 	previousStrategy = normalizeRoutingStrategy(previousStrategy)
 
-	nextSessionAffinity := newCfg.Routing.ClaudeCodeSessionAffinity || newCfg.Routing.SessionAffinity
+	nextSessionAffinity := newCfg.Routing.SessionAffinity
 	nextSessionAffinityTTL := newCfg.Routing.SessionAffinityTTL
 
 	selectorChanged := previousStrategy != nextStrategy ||
