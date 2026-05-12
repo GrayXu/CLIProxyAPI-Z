@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	internalconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
-	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
+	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
 
 type testTokenClientProvider struct{}
@@ -254,5 +254,34 @@ func TestServiceRunAndReloadKeepSessionAffinitySelector(t *testing.T) {
 	cancel()
 	if err := <-runErrCh; err != nil && err != context.Canceled {
 		t.Fatalf("run returned error: %v", err)
+	}
+}
+
+func TestForceHomeRuntimeConfigEnablesUsageStatistics(t *testing.T) {
+	cfg := &config.Config{
+		UsageStatisticsEnabled: false,
+	}
+
+	forceHomeRuntimeConfig(cfg)
+
+	if !cfg.UsageStatisticsEnabled {
+		t.Fatal("expected home runtime config to force usage statistics enabled")
+	}
+}
+
+func TestApplyHomeOverlayForcesUsageStatisticsEnabled(t *testing.T) {
+	baseCfg := &config.Config{}
+	baseCfg.Home.Enabled = true
+	service := &Service{cfg: baseCfg}
+
+	service.applyHomeOverlay(&config.Config{
+		UsageStatisticsEnabled: false,
+	})
+
+	if service.cfg == nil || !service.cfg.UsageStatisticsEnabled {
+		t.Fatal("expected home overlay to force usage statistics enabled")
+	}
+	if !service.cfg.Home.Enabled {
+		t.Fatal("expected home overlay to preserve local home settings")
 	}
 }

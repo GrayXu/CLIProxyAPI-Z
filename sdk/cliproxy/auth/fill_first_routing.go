@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	codexauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
+	codexauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
 )
 
 const (

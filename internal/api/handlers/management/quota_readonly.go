@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/tidwall/gjson"
 )
 
@@ -177,12 +177,10 @@ func (h *Handler) getCodexQuota(c *gin.Context, authIndex string, refresh bool) 
 	}
 
 	accountID := resolveCodexAccountID(auth)
-	if accountID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing codex account id"})
-		return
-	}
 	headers := cloneStringMap(codexQuotaHeaders)
-	headers["Chatgpt-Account-Id"] = accountID
+	if accountID != "" {
+		headers["Chatgpt-Account-Id"] = accountID
+	}
 	resp, err := h.executeManagedRequest(c.Request.Context(), managedRequestSpec{
 		AuthIndex: authIndex,
 		Method:    http.MethodGet,

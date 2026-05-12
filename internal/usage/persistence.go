@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	appconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
+	appconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 	_ "modernc.org/sqlite"
 )

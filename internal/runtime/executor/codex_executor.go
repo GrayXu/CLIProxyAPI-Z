@@ -11,15 +11,15 @@ import (
 	"strings"
 	"time"
 
-	codexauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/codex"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
+	codexauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -30,9 +30,9 @@ import (
 )
 
 const (
-	codexUserAgent  = "codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9"
-	codexOriginator = "codex_cli_rs"
-	codexUsageURL   = "https://chatgpt.com/backend-api/wham/usage"
+	codexUserAgent             = "codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9"
+	codexOriginator            = "codex_cli_rs"
+	codexDefaultImageToolModel = "gpt-image-2"
 )
 
 var dataTag = []byte("data:")
@@ -175,7 +175,6 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel, requestPath)
-	reporter.SetRequestedFastModeFromPayload(body)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.SetBytes(body, "stream", true)
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
@@ -268,6 +267,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		if detail, ok := helps.ParseCodexUsage(eventData); ok {
 			reporter.Publish(ctx, detail)
 		}
+		publishCodexImageToolUsage(ctx, reporter, body, eventData)
 
 		completedData := eventData
 		outputResult := gjson.GetBytes(completedData, "response.output")
@@ -330,7 +330,6 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel, requestPath)
-	reporter.SetRequestedFastModeFromPayload(body)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
 	body = normalizeCodexInstructions(body)
@@ -386,9 +385,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		return resp, err
 	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, data)
-	detail := helps.ParseOpenAIUsage(data)
-	detail.ServiceTier = helps.ParseServiceTier(data, "service_tier", "response.service_tier")
-	reporter.Publish(ctx, detail)
+	reporter.Publish(ctx, helps.ParseOpenAIUsage(data))
 	reporter.EnsurePublished(ctx)
 	var param any
 	out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, data, &param)
@@ -428,7 +425,6 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel, requestPath)
-	reporter.SetRequestedFastModeFromPayload(body)
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
@@ -511,6 +507,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 					if detail, ok := helps.ParseCodexUsage(data); ok {
 						reporter.Publish(ctx, detail)
 					}
+					publishCodexImageToolUsage(ctx, reporter, body, data)
 					data = patchCodexCompletedOutput(data, outputItemsByIndex, outputItemsFallback)
 					translatedLine = append([]byte("data: "), data...)
 				}
@@ -518,13 +515,20 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 
 			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, originalPayload, body, translatedLine, &param)
 			for i := range chunks {
-				out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}
+				select {
+				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 		if errScan := scanner.Err(); errScan != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
-			reporter.PublishFailure(ctx)
-			out <- cliproxyexecutor.StreamChunk{Err: errScan}
+			reporter.PublishFailure(ctx, errScan)
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
+			case <-ctx.Done():
+			}
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
@@ -689,212 +693,44 @@ func countCodexInputTokens(enc tokenizer.Codec, body []byte) (int64, error) {
 
 func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	log.Debugf("codex executor: refresh called")
+	if refreshed, handled, err := helps.RefreshAuthViaHome(ctx, e.cfg, auth); handled {
+		return refreshed, err
+	}
 	if auth == nil {
 		return nil, statusErr{code: 500, msg: "codex executor: auth is nil"}
+	}
+	var refreshToken string
+	if auth.Metadata != nil {
+		if v, ok := auth.Metadata["refresh_token"].(string); ok && v != "" {
+			refreshToken = v
+		}
+	}
+	if refreshToken == "" {
+		return auth, nil
+	}
+	svc := codexauth.NewCodexAuthWithProxyURL(e.cfg, auth.ProxyURL)
+	td, err := svc.RefreshTokensWithRetry(ctx, refreshToken, 3)
+	if err != nil {
+		return nil, err
 	}
 	if auth.Metadata == nil {
 		auth.Metadata = make(map[string]any)
 	}
-	var refreshToken string
-	if v, ok := auth.Metadata["refresh_token"].(string); ok && v != "" {
-		refreshToken = v
+	auth.Metadata["id_token"] = td.IDToken
+	auth.Metadata["access_token"] = td.AccessToken
+	if td.RefreshToken != "" {
+		auth.Metadata["refresh_token"] = td.RefreshToken
 	}
-	if refreshToken != "" {
-		svc := codexauth.NewCodexAuthWithProxyURL(e.cfg, auth.ProxyURL)
-		td, err := svc.RefreshTokensWithRetry(ctx, refreshToken, 3)
-		if err != nil {
-			return nil, err
-		}
-		auth.Metadata["id_token"] = td.IDToken
-		auth.Metadata["access_token"] = td.AccessToken
-		if td.RefreshToken != "" {
-			auth.Metadata["refresh_token"] = td.RefreshToken
-		}
-		if td.AccountID != "" {
-			auth.Metadata["account_id"] = td.AccountID
-		}
-		auth.Metadata["email"] = td.Email
-		// Use unified key in files
-		auth.Metadata["expired"] = td.Expire
-		auth.Metadata["type"] = "codex"
-		now := time.Now().Format(time.RFC3339)
-		auth.Metadata["last_refresh"] = now
+	if td.AccountID != "" {
+		auth.Metadata["account_id"] = td.AccountID
 	}
-
-	e.refreshQuotaSnapshot(ctx, auth, time.Now())
+	auth.Metadata["email"] = td.Email
+	// Use unified key in files
+	auth.Metadata["expired"] = td.Expire
+	auth.Metadata["type"] = "codex"
+	now := time.Now().Format(time.RFC3339)
+	auth.Metadata["last_refresh"] = now
 	return auth, nil
-}
-
-func (e *CodexExecutor) refreshQuotaSnapshot(ctx context.Context, auth *cliproxyauth.Auth, now time.Time) {
-	if auth == nil {
-		return
-	}
-	accessToken := strings.TrimSpace(metadataString(auth.Metadata, "access_token"))
-	accountID := resolveCodexQuotaAccountID(auth)
-	if accessToken == "" || accountID == "" {
-		return
-	}
-
-	payload, resetAt, hasWeeklyWindow, err := e.fetchQuotaSnapshot(ctx, auth, accessToken, accountID, now)
-	if err != nil {
-		log.WithError(err).Warnf("codex executor: failed to refresh weekly quota snapshot for auth %s", auth.ID)
-		return
-	}
-	cliproxyauth.StoreCodexQuotaSnapshot(auth, payload, now)
-	cliproxyauth.UpdateCodexQuotaSmartStateFromSnapshot(auth, payload, now)
-	if hasWeeklyWindow {
-		cliproxyauth.StoreRoutingWeeklySnapshot(auth, resetAt, now)
-		return
-	}
-	cliproxyauth.StoreRoutingWeeklySnapshotObservedAt(auth, now)
-}
-
-func (e *CodexExecutor) fetchQuotaSnapshot(ctx context.Context, auth *cliproxyauth.Auth, accessToken string, accountID string, now time.Time) (string, *time.Time, bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, codexUsageURL, nil)
-	if err != nil {
-		return "", nil, false, err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", codexUserAgent)
-	req.Header.Set("Chatgpt-Account-Id", accountID)
-
-	client := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 15*time.Second)
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", nil, false, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", nil, false, err
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", nil, false, fmt.Errorf("codex quota request returned %d", resp.StatusCode)
-	}
-	if weeklyWindow := extractCodexWeeklyWindow(body); !weeklyWindow.Exists() || weeklyWindow.Type == gjson.Null {
-		return string(body), nil, false, nil
-	}
-	resetAt, ok := extractCodexWeeklyResetAt(body, now)
-	if !ok {
-		return string(body), nil, true, nil
-	}
-	return string(body), &resetAt, true, nil
-}
-
-func resolveCodexQuotaAccountID(auth *cliproxyauth.Auth) string {
-	if auth == nil {
-		return ""
-	}
-	if accountID := strings.TrimSpace(metadataString(auth.Metadata, "account_id")); accountID != "" {
-		return accountID
-	}
-	idToken := strings.TrimSpace(metadataString(auth.Metadata, "id_token"))
-	if idToken == "" {
-		return ""
-	}
-	claims, err := codexauth.ParseJWTToken(idToken)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(claims.GetAccountID())
-}
-
-func extractCodexWeeklyResetAt(payload []byte, now time.Time) (time.Time, bool) {
-	weeklyWindow := extractCodexWeeklyWindow(payload)
-	if !weeklyWindow.Exists() || weeklyWindow.Type == gjson.Null {
-		return time.Time{}, false
-	}
-	if resetAt, ok := extractCodexWindowResetAt(weeklyWindow, now); ok {
-		return resetAt, true
-	}
-	return time.Time{}, false
-}
-
-func extractCodexWeeklyWindow(payload []byte) gjson.Result {
-	rateLimit := firstExistingResultBytes(payload, "rate_limit", "rateLimit")
-	if !rateLimit.Exists() || rateLimit.Type == gjson.Null {
-		return gjson.Result{}
-	}
-
-	primaryWindow := firstExistingResult(rateLimit, "primary_window", "primaryWindow")
-	secondaryWindow := firstExistingResult(rateLimit, "secondary_window", "secondaryWindow")
-	if isCodexWeeklyWindow(primaryWindow) {
-		return primaryWindow
-	}
-	if isCodexWeeklyWindow(secondaryWindow) {
-		return secondaryWindow
-	}
-	if secondaryWindow.Exists() && secondaryWindow.Type != gjson.Null {
-		return secondaryWindow
-	}
-	return gjson.Result{}
-}
-
-func isCodexWeeklyWindow(window gjson.Result) bool {
-	if !window.Exists() || window.Type == gjson.Null {
-		return false
-	}
-	seconds := firstExistingResult(window, "limit_window_seconds", "limitWindowSeconds")
-	return seconds.Exists() && seconds.Int() == 604800
-}
-
-func extractCodexWindowResetAt(window gjson.Result, now time.Time) (time.Time, bool) {
-	resetAt := firstExistingResult(window, "reset_at", "resetAt")
-	if resetAt.Exists() {
-		if unix := resetAt.Int(); unix > 0 {
-			return time.Unix(unix, 0).UTC(), true
-		}
-	}
-
-	resetAfter := firstExistingResult(window, "reset_after_seconds", "resetAfterSeconds")
-	if resetAfter.Exists() {
-		if seconds := resetAfter.Int(); seconds > 0 {
-			return now.UTC().Add(time.Duration(seconds) * time.Second), true
-		}
-	}
-
-	return time.Time{}, false
-}
-
-func firstExistingResultBytes(payload []byte, paths ...string) gjson.Result {
-	for _, path := range paths {
-		result := gjson.GetBytes(payload, path)
-		if result.Exists() {
-			return result
-		}
-	}
-	return gjson.Result{}
-}
-
-func firstExistingResult(parent gjson.Result, paths ...string) gjson.Result {
-	for _, path := range paths {
-		result := parent.Get(path)
-		if result.Exists() {
-			return result
-		}
-	}
-	return gjson.Result{}
-}
-
-func metadataString(meta map[string]any, key string) string {
-	if len(meta) == 0 {
-		return ""
-	}
-	raw, ok := meta[key]
-	if !ok || raw == nil {
-		return ""
-	}
-	switch v := raw.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case []byte:
-		return strings.TrimSpace(string(v))
-	default:
-		return ""
-	}
 }
 
 func (e *CodexExecutor) cacheHelper(ctx context.Context, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte) (*http.Request, error) {
@@ -995,11 +831,58 @@ func newCodexStatusErr(statusCode int, body []byte) statusErr {
 	if isCodexModelCapacityError(body) {
 		errCode = http.StatusTooManyRequests
 	}
+	body = classifyCodexStatusError(errCode, body)
 	err := statusErr{code: errCode, msg: string(body)}
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
 		err.retryAfter = retryAfter
 	}
 	return err
+}
+
+func classifyCodexStatusError(statusCode int, body []byte) []byte {
+	code, errType, ok := codexStatusErrorClassification(statusCode, body)
+	if !ok {
+		return body
+	}
+	message := gjson.GetBytes(body, "error.message").String()
+	if message == "" {
+		message = gjson.GetBytes(body, "message").String()
+	}
+	if message == "" {
+		message = strings.TrimSpace(string(body))
+	}
+	if message == "" {
+		message = http.StatusText(statusCode)
+	}
+	out := []byte(`{"error":{}}`)
+	out, _ = sjson.SetBytes(out, "error.message", message)
+	out, _ = sjson.SetBytes(out, "error.type", errType)
+	out, _ = sjson.SetBytes(out, "error.code", code)
+	return out
+}
+
+func codexStatusErrorClassification(statusCode int, body []byte) (code string, errType string, ok bool) {
+	errorMessage := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.message").String()))
+	if errorMessage == "" {
+		errorMessage = strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "message").String()))
+	}
+	lower := strings.ToLower(strings.TrimSpace(string(body)))
+	upstreamCode := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.code").String()))
+	upstreamType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "error.type").String()))
+	isInvalidRequest := upstreamType == "" || upstreamType == "invalid_request_error"
+
+	switch {
+	case statusCode == http.StatusRequestEntityTooLarge || upstreamCode == "context_length_exceeded" || upstreamCode == "context_too_large" || isInvalidRequest && (strings.Contains(errorMessage, "context length") || strings.Contains(errorMessage, "context_length") || strings.Contains(errorMessage, "maximum context") || strings.Contains(errorMessage, "too many tokens")):
+		return "context_too_large", "invalid_request_error", true
+	case strings.Contains(lower, "invalid signature in thinking block") || strings.Contains(lower, "invalid_encrypted_content"):
+		return "thinking_signature_invalid", "invalid_request_error", true
+	case upstreamCode == "previous_response_not_found" || strings.Contains(lower, "previous_response_not_found") || strings.Contains(lower, "previous_response_id") && strings.Contains(lower, "not found"):
+		return "previous_response_not_found", "invalid_request_error", true
+	case statusCode == http.StatusUnauthorized || upstreamType == "authentication_error" || upstreamCode == "invalid_api_key" || strings.Contains(lower, "invalid or expired token") || strings.Contains(lower, "refresh_token_reused"):
+		return "auth_unavailable", "authentication_error", true
+	default:
+		return "", "", false
+	}
 }
 
 func normalizeCodexInstructions(body []byte) []byte {
@@ -1013,11 +896,21 @@ func normalizeCodexInstructions(body []byte) []byte {
 var imageGenToolJSON = []byte(`{"type":"image_generation","output_format":"png"}`)
 var imageGenToolArrayJSON = []byte(`[{"type":"image_generation","output_format":"png"}]`)
 
+func isCodexFreePlanAuth(auth *cliproxyauth.Auth) bool {
+	if auth == nil || auth.Attributes == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(auth.Attributes["plan_type"]), "free")
+}
+
 func ensureImageGenerationTool(body []byte, baseModel string, auth *cliproxyauth.Auth) []byte {
 	if strings.HasSuffix(baseModel, "spark") {
 		return body
 	}
-	if isFreeCodexAuth(auth) {
+	if isCodexFreePlanAuth(auth) {
 		return body
 	}
 
@@ -1035,26 +928,29 @@ func ensureImageGenerationTool(body []byte, baseModel string, auth *cliproxyauth
 	return body
 }
 
-func isFreeCodexAuth(auth *cliproxyauth.Auth) bool {
-	if auth == nil {
-		return false
+func publishCodexImageToolUsage(ctx context.Context, reporter *helps.UsageReporter, body []byte, completedData []byte) {
+	detail, ok := helps.ParseCodexImageToolUsage(completedData)
+	if !ok {
+		return
 	}
-	for _, value := range []string{
-		auth.Attributes["plan_type"],
-		auth.Attributes["plan"],
-	} {
-		if strings.EqualFold(strings.TrimSpace(value), "free") {
-			return true
-		}
-	}
-	if auth.Metadata != nil {
-		for _, key := range []string{"plan_type", "plan"} {
-			if value, ok := auth.Metadata[key].(string); ok && strings.EqualFold(strings.TrimSpace(value), "free") {
-				return true
+	reporter.EnsurePublished(ctx)
+	reporter.PublishAdditionalModel(ctx, codexImageGenerationToolModel(body), detail)
+}
+
+func codexImageGenerationToolModel(body []byte) string {
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() {
+		for _, tool := range tools.Array() {
+			if tool.Get("type").String() != "image_generation" {
+				continue
 			}
+			if model := strings.TrimSpace(tool.Get("model").String()); model != "" {
+				return model
+			}
+			break
 		}
 	}
-	return false
+	return codexDefaultImageToolModel
 }
 
 func isCodexModelCapacityError(errorBody []byte) bool {
