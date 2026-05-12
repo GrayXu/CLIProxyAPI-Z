@@ -1,0 +1,34 @@
+# Merge Log
+
+Append new entries at the top. Record upstream syncs, management-center subtree
+updates, conflict decisions, validation scope, and push/deploy status.
+
+## 2026-05-12 - upstream/main + management-center/main sync
+
+- Branch: `merge/upstream-management-20260512`
+- Final pushed main: `bf95c8c8`
+- Previous origin/main: `90bfa1b0`
+- Upstream merged: `upstream/main` at `1fca942b`
+- Management center merged: `management-center/main` at `62092cc8`
+- Local checkpoint included: `5d239bbf chore(webui): refresh management assets`
+- Conflict decisions:
+  - Took `origin/main` generated management HTML when first merging origin into the checkpoint branch.
+  - Kept fork-specific bundled management HTML initialization instead of following upstream v7 removal of the bundled asset.
+  - Followed upstream v7 module path and imports.
+  - Preserved fork management behavior: admin/viewer route split, public issue API key flow, usage stats/event fields, `quota-sticky`, fast mode display/export, advanced pricing fields.
+  - Preserved fork WebUI Codex quota path through backend `/quota/codex`; ported management-center's optional `Chatgpt-Account-Id` behavior into the backend quota refresh path.
+  - Kept upstream home-mode/session reuse changes while preserving fork sticky/quota selector behavior.
+- Generated assets:
+  - Ran `scripts/build-management-html.sh`.
+  - Updated `third_party/Cli-Proxy-API-Management-Center/dist/index.html`.
+  - Updated `internal/managementasset/bundled/management.html`.
+- Validation:
+  - `scripts/build-management-html.sh`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go build -p=1 ./cmd/server`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go test -p=1 ./internal/api/handlers/management`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go test -p=1 ./internal/redisqueue ./internal/runtime/executor/helps`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go test -p=1 ./sdk/cliproxy/auth ./sdk/cliproxy`
+- Note: full `go test ./...` was skipped because this host has about 1.8 GiB RAM and parallel Go compilation caused OOM. Use low-concurrency validation here.
+- Pushed:
+  - `origin/merge/upstream-management-20260512`
+  - `origin/main` fast-forwarded to `bf95c8c8`

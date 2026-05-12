@@ -154,6 +154,7 @@ git subtree pull --prefix=third_party/Cli-Proxy-API-Management-Center management
   - legacy `/v0/management/usage` behavior
   - admin/viewer management route split and public issue API key flow
 - After any Management WebUI source change or subtree merge, run `scripts/build-management-html.sh` and commit the WebUI source, `third_party/Cli-Proxy-API-Management-Center/dist/index.html`, and `internal/managementasset/bundled/management.html` together. Avoid ending with a standalone `npm run build`; the final generated artifacts should come from the repo script.
+- Maintain the root `merge.log` as an append-only local merge record. After each upstream or Management WebUI sync, add a top entry covering source commits, conflict decisions, generated assets, validation commands, and push/deploy status.
 - Run focused tests for touched packages first, then the broad validation set:
 
 ```bash
