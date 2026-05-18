@@ -420,6 +420,11 @@ func (s *Server) setupRoutes() {
 		v1.POST("/completions", openaiHandlers.Completions)
 		v1.POST("/images/generations", openaiHandlers.ImagesGenerations)
 		v1.POST("/images/edits", openaiHandlers.ImagesEdits)
+		v1.POST("/videos", openaiHandlers.VideosCreate)
+		v1.POST("/videos/generations", openaiHandlers.XAIVideosGenerations)
+		v1.POST("/videos/edits", openaiHandlers.XAIVideosEdits)
+		v1.POST("/videos/extensions", openaiHandlers.XAIVideosExtensions)
+		v1.GET("/videos/:request_id", openaiHandlers.XAIVideosRetrieve)
 		v1.POST("/messages", claudeCodeHandlers.ClaudeMessages)
 		v1.POST("/messages/count_tokens", claudeCodeHandlers.ClaudeCountTokens)
 		v1.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
@@ -440,9 +445,9 @@ func (s *Server) setupRoutes() {
 	v1beta := s.engine.Group("/v1beta")
 	v1beta.Use(AuthMiddleware(s.accessManager))
 	{
-		v1beta.GET("/models", geminiHandlers.GeminiModels)
+		v1beta.GET("/models", s.geminiModelsHandler(geminiHandlers))
 		v1beta.POST("/models/*action", geminiHandlers.GeminiHandler)
-		v1beta.GET("/models/*action", geminiHandlers.GeminiGetHandler)
+		v1beta.GET("/models/*action", s.geminiGetHandler(geminiHandlers))
 	}
 
 	// Root endpoint
@@ -517,6 +522,20 @@ func (s *Server) setupRoutes() {
 		c.String(http.StatusOK, oauthCallbackSuccessHTML)
 	})
 
+	s.engine.GET("/xai/callback", func(c *gin.Context) {
+		code := c.Query("code")
+		state := c.Query("state")
+		errStr := c.Query("error")
+		if errStr == "" {
+			errStr = c.Query("error_description")
+		}
+		if state != "" {
+			_, _ = managementHandlers.WriteOAuthCallbackFileForPendingSession(s.cfg.AuthDir, "xai", state, code, errStr)
+		}
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, oauthCallbackSuccessHTML)
+	})
+
 	// Management routes are registered lazily by registerManagementRoutes when a secret is configured.
 }
 
@@ -578,6 +597,7 @@ func (s *Server) registerManagementRoutes() {
 	protected.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
 	protected.GET("/antigravity-auth-url", s.mgmt.RequestAntigravityToken)
 	protected.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
+	protected.GET("/xai-auth-url", s.mgmt.RequestXAIToken)
 	protected.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
 	protected.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 	admin := protected.Group("")
@@ -867,6 +887,15 @@ func (s *Server) watchKeepAlive() {
 // otherwise it routes to OpenAI handler.
 func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, claudeHandler *claude.ClaudeCodeAPIHandler) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if _, ok := c.Request.URL.Query()["client_version"]; ok {
+			if s != nil && s.cfg != nil && s.cfg.Home.Enabled {
+				s.handleHomeCodexClientModels(c)
+				return
+			}
+			openaiHandler.OpenAIModels(c)
+			return
+		}
+
 		if s != nil && s.cfg != nil && s.cfg.Home.Enabled {
 			s.handleHomeModels(c)
 			return
@@ -885,6 +914,56 @@ func (s *Server) unifiedModelsHandler(openaiHandler *openai.OpenAIAPIHandler, cl
 	}
 }
 
+func (s *Server) handleHomeCodexClientModels(c *gin.Context) {
+	entries, ok := s.loadHomeModelEntries(c)
+	if !ok {
+		return
+	}
+
+	models := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		model := map[string]any{
+			"id":     entry.id,
+			"object": "model",
+		}
+		if entry.created > 0 {
+			model["created"] = entry.created
+		}
+		if entry.ownedBy != "" {
+			model["owned_by"] = entry.ownedBy
+		}
+		if entry.displayName != "" {
+			model["display_name"] = entry.displayName
+			model["description"] = entry.displayName
+		}
+		models = append(models, model)
+	}
+
+	c.JSON(http.StatusOK, openai.CodexClientModelsResponse(models))
+}
+
+func (s *Server) geminiModelsHandler(geminiHandler *gemini.GeminiAPIHandler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s != nil && s.cfg != nil && s.cfg.Home.Enabled {
+			s.handleHomeGeminiModels(c)
+			return
+		}
+
+		geminiHandler.GeminiModels(c)
+	}
+}
+
+func (s *Server) geminiGetHandler(geminiHandler *gemini.GeminiAPIHandler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if s != nil && s.cfg != nil && s.cfg.Home.Enabled {
+			s.handleHomeGeminiModel(c)
+			return
+		}
+
+		geminiHandler.GeminiGetHandler(c)
+	}
+}
+
 type homeModelEntry struct {
 	id          string
 	created     int64
@@ -893,39 +972,8 @@ type homeModelEntry struct {
 }
 
 func (s *Server) handleHomeModels(c *gin.Context) {
-	if s == nil || c == nil || c.Request == nil {
-		return
-	}
-	client := home.Current()
-	if client == nil {
-		c.JSON(http.StatusServiceUnavailable, handlers.ErrorResponse{
-			Error: handlers.ErrorDetail{
-				Message: "home control center unavailable",
-				Type:    "server_error",
-			},
-		})
-		return
-	}
-
-	raw, errGet := client.GetModels(c.Request.Context())
-	if errGet != nil {
-		c.JSON(http.StatusBadGateway, handlers.ErrorResponse{
-			Error: handlers.ErrorDetail{
-				Message: errGet.Error(),
-				Type:    "server_error",
-			},
-		})
-		return
-	}
-
-	entries, errDecode := decodeHomeModels(raw)
-	if errDecode != nil {
-		c.JSON(http.StatusBadGateway, handlers.ErrorResponse{
-			Error: handlers.ErrorDetail{
-				Message: errDecode.Error(),
-				Type:    "server_error",
-			},
-		})
+	entries, ok := s.loadHomeModelEntries(c)
+	if !ok {
 		return
 	}
 
@@ -951,10 +999,10 @@ func (s *Server) handleHomeModels(c *gin.Context) {
 		firstID := ""
 		lastID := ""
 		if len(out) > 0 {
-			if id, ok := out[0]["id"].(string); ok {
+			if id, okID := out[0]["id"].(string); okID {
 				firstID = id
 			}
-			if id, ok := out[len(out)-1]["id"].(string); ok {
+			if id, okID := out[len(out)-1]["id"].(string); okID {
 				lastID = id
 			}
 		}
@@ -987,6 +1035,115 @@ func (s *Server) handleHomeModels(c *gin.Context) {
 	})
 }
 
+func (s *Server) handleHomeGeminiModels(c *gin.Context) {
+	entries, ok := s.loadHomeModelEntries(c)
+	if !ok {
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"models": formatHomeGeminiModels(entries),
+	})
+}
+
+func (s *Server) handleHomeGeminiModel(c *gin.Context) {
+	entries, ok := s.loadHomeModelEntries(c)
+	if !ok {
+		return
+	}
+
+	action := strings.TrimPrefix(c.Param("action"), "/")
+	action = strings.TrimSpace(action)
+	for _, entry := range entries {
+		if homeGeminiModelMatches(entry, action) {
+			c.JSON(http.StatusOK, formatHomeGeminiModel(entry))
+			return
+		}
+	}
+
+	c.JSON(http.StatusNotFound, handlers.ErrorResponse{
+		Error: handlers.ErrorDetail{
+			Message: "Not Found",
+			Type:    "not_found",
+		},
+	})
+}
+
+func (s *Server) loadHomeModelEntries(c *gin.Context) ([]homeModelEntry, bool) {
+	if s == nil || c == nil || c.Request == nil {
+		return nil, false
+	}
+	client := home.Current()
+	if client == nil {
+		c.JSON(http.StatusServiceUnavailable, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: "home control center unavailable",
+				Type:    "server_error",
+			},
+		})
+		return nil, false
+	}
+
+	raw, errGet := client.GetModels(c.Request.Context())
+	if errGet != nil {
+		c.JSON(http.StatusBadGateway, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: errGet.Error(),
+				Type:    "server_error",
+			},
+		})
+		return nil, false
+	}
+
+	entries, errDecode := decodeHomeModels(raw)
+	if errDecode != nil {
+		c.JSON(http.StatusBadGateway, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: errDecode.Error(),
+				Type:    "server_error",
+			},
+		})
+		return nil, false
+	}
+
+	return entries, true
+}
+
+func formatHomeGeminiModels(entries []homeModelEntry) []map[string]any {
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, formatHomeGeminiModel(entry))
+	}
+	return out
+}
+
+func formatHomeGeminiModel(entry homeModelEntry) map[string]any {
+	name := entry.id
+	if !strings.HasPrefix(name, "models/") {
+		name = "models/" + name
+	}
+	displayName := entry.displayName
+	if displayName == "" {
+		displayName = entry.id
+	}
+	return map[string]any{
+		"name":                       name,
+		"displayName":                displayName,
+		"description":                displayName,
+		"supportedGenerationMethods": []string{"generateContent"},
+	}
+}
+
+func homeGeminiModelMatches(entry homeModelEntry, action string) bool {
+	id := strings.TrimSpace(entry.id)
+	if id == "" || action == "" {
+		return false
+	}
+	normalizedAction := strings.TrimPrefix(action, "models/")
+	normalizedID := strings.TrimPrefix(id, "models/")
+	return action == id || action == "models/"+id || normalizedAction == normalizedID
+}
+
 func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("home models payload is empty")
@@ -1006,6 +1163,11 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 		for _, model := range models {
 			id, _ := model["id"].(string)
 			id = strings.TrimSpace(id)
+			if id == "" {
+				name, _ := model["name"].(string)
+				name = strings.TrimSpace(name)
+				id = strings.TrimPrefix(name, "models/")
+			}
 			if id == "" {
 				continue
 			}
@@ -1032,6 +1194,10 @@ func decodeHomeModels(raw []byte) ([]homeModelEntry, error) {
 			ownedBy = strings.TrimSpace(ownedBy)
 			displayName, _ := model["display_name"].(string)
 			displayName = strings.TrimSpace(displayName)
+			if displayName == "" {
+				displayName, _ = model["displayName"].(string)
+				displayName = strings.TrimSpace(displayName)
+			}
 
 			out = append(out, homeModelEntry{
 				id:          id,

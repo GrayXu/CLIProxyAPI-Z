@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ type Record struct {
 	Failed      bool
 	Fail        Failure
 	Detail      Detail
+	// ResponseHeaders stores a snapshot of upstream response headers for usage sinks.
+	ResponseHeaders http.Header
 }
 
 // Failure holds HTTP failure metadata for an upstream request attempt.
@@ -34,13 +37,15 @@ type Failure struct {
 
 // Detail holds the token usage breakdown.
 type Detail struct {
-	InputTokens       int64
-	OutputTokens      int64
-	ReasoningTokens   int64
-	CachedTokens      int64
-	TotalTokens       int64
-	ServiceTier       string
-	RequestedFastMode bool
+	InputTokens         int64
+	OutputTokens        int64
+	ReasoningTokens     int64
+	CachedTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	TotalTokens         int64
+	ServiceTier         string
+	RequestedFastMode   bool
 }
 
 type requestedModelAliasContextKey struct{}
