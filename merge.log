@@ -3,6 +3,36 @@
 Append new entries at the top. Record upstream syncs, management-center subtree
 updates, conflict decisions, validation scope, and push/deploy status.
 
+## 2026-05-19 - upstream/main + management-center/main sync
+
+- Branch: `main`
+- Previous origin/main: `7a17dfad`
+- Upstream merged: `upstream/main` at `ad98c954`
+- Management center merged: `management-center/main` at `65f8b23a`
+- Merge commits:
+  - `e098ffa5 chore(merge): merge upstream updates`
+  - `d7e32cc5 chore(webui): merge management center updates`
+- Conflict decisions:
+  - Kept fork-specific management behavior, including admin/viewer route split, public issue API key flow, auth file admin APIs, `quota-sticky`, `quota-smart`, usage stats, fast mode display/export, and advanced pricing fields.
+  - Merged upstream usage additions with fork fast mode fields: retained `service_tier` and `requested_fast_mode`, and added upstream response headers plus cache read/creation token fields.
+  - Used upstream request-aware payload config for Codex websocket requests, then preserved fork fast mode request tracking via `SetRequestedFastModeFromPayload`.
+  - Kept upstream OAuth route additions under the existing protected management group and avoided duplicate route registration.
+  - Preserved fork auth-file editor fields while adding upstream invalid HTML/challenge preview handling.
+  - Kept upstream visual config additions for Redis usage retention, Antigravity signature settings, and header defaults while preserving fork routing/quota fields.
+- Generated assets:
+  - Ran `scripts/build-management-html.sh`.
+  - Updated `third_party/Cli-Proxy-API-Management-Center/dist/index.html`.
+  - Updated `internal/managementasset/bundled/management.html`.
+- Validation:
+  - `cd third_party/Cli-Proxy-API-Management-Center && npm run type-check`
+  - `scripts/build-management-html.sh`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go build -p=1 ./cmd/server`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go test -p=1 ./internal/api/handlers/management ./internal/redisqueue ./internal/runtime/executor/helps ./sdk/cliproxy/auth ./sdk/cliproxy ./internal/api`
+- Deployment:
+  - Planned in this run after committing generated assets, with binary and runtime management HTML backups under `/var/lib/cliproxyapi/backups/`.
+- Push:
+  - Planned to `origin/main` after deployment verification.
+
 ## 2026-05-12 - upstream/main + management-center/main sync
 
 - Branch: `merge/upstream-management-20260512`
