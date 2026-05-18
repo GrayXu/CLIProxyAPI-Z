@@ -130,7 +130,7 @@ const fetchManagementQuotaSnapshot = async <T,>(
   if (options?.refresh) {
     params.refresh = 'true';
   }
-  return apiClient.get<T>(`/quota/${provider}`, { params });
+  return apiClient.get<T>(`/quota/${provider}`, { params, skipUnauthorizedLogout: true });
 };
 
 const resolveAntigravityProjectId = async (file: AuthFileItem): Promise<string> => {

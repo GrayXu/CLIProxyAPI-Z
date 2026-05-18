@@ -2,8 +2,7 @@
  * Generic API call helper (proxied via management API).
  */
 
-import type { AxiosRequestConfig } from 'axios';
-import { apiClient } from './client';
+import { apiClient, type ApiClientRequestConfig } from './client';
 
 export interface ApiCallRequest {
   authIndex?: string;
@@ -80,9 +79,12 @@ export const getApiCallErrorMessage = (result: ApiCallResult): string => {
 export const apiCallApi = {
   request: async (
     payload: ApiCallRequest,
-    config?: AxiosRequestConfig
+    config?: ApiClientRequestConfig
   ): Promise<ApiCallResult> => {
-    const response = await apiClient.post<Record<string, unknown>>('/api-call', payload, config);
+    const response = await apiClient.post<Record<string, unknown>>('/api-call', payload, {
+      ...config,
+      skipUnauthorizedLogout: true
+    });
     const statusCode = Number(response?.status_code ?? response?.statusCode ?? 0);
     const header = (response?.header ?? response?.headers ?? {}) as Record<string, string[]>;
     const { bodyText, body } = normalizeBody(response?.body);
