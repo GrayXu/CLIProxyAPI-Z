@@ -49,7 +49,7 @@ if [[ ! -f "${WEBUI_DIR}/package.json" ]]; then
 fi
 
 pushd "${WEBUI_DIR}" >/dev/null
-npm ci
+npm ci --no-audit --prefer-offline
 npm run build
 popd >/dev/null
 
