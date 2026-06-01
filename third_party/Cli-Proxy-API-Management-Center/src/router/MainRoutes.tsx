@@ -1,16 +1,6 @@
 import { Navigate, useRoutes, type Location, type RouteObject } from 'react-router-dom';
 import { DashboardPage } from '@/pages/DashboardPage';
-import { AiProvidersPage } from '@/pages/AiProvidersPage';
-import { AiProvidersAmpcodeEditPage } from '@/pages/AiProvidersAmpcodeEditPage';
-import { AiProvidersClaudeEditLayout } from '@/pages/AiProvidersClaudeEditLayout';
-import { AiProvidersClaudeEditPage } from '@/pages/AiProvidersClaudeEditPage';
-import { AiProvidersClaudeModelsPage } from '@/pages/AiProvidersClaudeModelsPage';
-import { AiProvidersCodexEditPage } from '@/pages/AiProvidersCodexEditPage';
-import { AiProvidersGeminiEditPage } from '@/pages/AiProvidersGeminiEditPage';
-import { AiProvidersOpenAIEditLayout } from '@/pages/AiProvidersOpenAIEditLayout';
-import { AiProvidersOpenAIEditPage } from '@/pages/AiProvidersOpenAIEditPage';
-import { AiProvidersOpenAIModelsPage } from '@/pages/AiProvidersOpenAIModelsPage';
-import { AiProvidersVertexEditPage } from '@/pages/AiProvidersVertexEditPage';
+import { ProvidersWorkbenchPage } from '@/features/providers/ProvidersWorkbenchPage';
 import { AuthFilesPage } from '@/pages/AuthFilesPage';
 import { AuthFilesOAuthExcludedEditPage } from '@/pages/AuthFilesOAuthExcludedEditPage';
 import { AuthFilesOAuthModelAliasEditPage } from '@/pages/AuthFilesOAuthModelAliasEditPage';
@@ -21,11 +11,7 @@ import { ConfigPage } from '@/pages/ConfigPage';
 import { LogsPage } from '@/pages/LogsPage';
 import { SystemPage } from '@/pages/SystemPage';
 
-type RouteConfig = {
-  path?: string;
-  index?: boolean;
-  element?: RouteObject['element'];
-  children?: RouteConfig[];
+type RouteConfig = RouteObject & {
   requiredRoute?: string;
 };
 
@@ -40,10 +26,7 @@ const isAllowedRoute = (allowedRoutes: string[], requiredRoute?: string): boolea
   const normalizedAllowedRoutes = allowedRoutes.map((route) => normalizePath(route));
   const normalizedRequiredRoute = normalizePath(requiredRoute);
   if (normalizedRequiredRoute === '/dashboard') {
-    return (
-      normalizedAllowedRoutes.includes('/') ||
-      normalizedAllowedRoutes.includes('/dashboard')
-    );
+    return normalizedAllowedRoutes.includes('/') || normalizedAllowedRoutes.includes('/dashboard');
   }
   return normalizedAllowedRoutes.includes(normalizedRequiredRoute);
 };
@@ -53,51 +36,8 @@ const mainRoutes: RouteConfig[] = [
   { path: '/dashboard', element: <DashboardPage />, requiredRoute: '/dashboard' },
   { path: '/settings', element: <Navigate to="/config" replace />, requiredRoute: '/config' },
   { path: '/api-keys', element: <Navigate to="/config" replace />, requiredRoute: '/config' },
-  { path: '/ai-providers/gemini/new', element: <AiProvidersGeminiEditPage />, requiredRoute: '/ai-providers' },
-  { path: '/ai-providers/gemini/:index', element: <AiProvidersGeminiEditPage />, requiredRoute: '/ai-providers' },
-  { path: '/ai-providers/codex/new', element: <AiProvidersCodexEditPage />, requiredRoute: '/ai-providers' },
-  { path: '/ai-providers/codex/:index', element: <AiProvidersCodexEditPage />, requiredRoute: '/ai-providers' },
-  {
-    path: '/ai-providers/claude/new',
-    element: <AiProvidersClaudeEditLayout />,
-    requiredRoute: '/ai-providers',
-    children: [
-      { index: true, element: <AiProvidersClaudeEditPage /> },
-      { path: 'models', element: <AiProvidersClaudeModelsPage /> },
-    ],
-  },
-  {
-    path: '/ai-providers/claude/:index',
-    element: <AiProvidersClaudeEditLayout />,
-    requiredRoute: '/ai-providers',
-    children: [
-      { index: true, element: <AiProvidersClaudeEditPage /> },
-      { path: 'models', element: <AiProvidersClaudeModelsPage /> },
-    ],
-  },
-  { path: '/ai-providers/vertex/new', element: <AiProvidersVertexEditPage />, requiredRoute: '/ai-providers' },
-  { path: '/ai-providers/vertex/:index', element: <AiProvidersVertexEditPage />, requiredRoute: '/ai-providers' },
-  {
-    path: '/ai-providers/openai/new',
-    element: <AiProvidersOpenAIEditLayout />,
-    requiredRoute: '/ai-providers',
-    children: [
-      { index: true, element: <AiProvidersOpenAIEditPage /> },
-      { path: 'models', element: <AiProvidersOpenAIModelsPage /> },
-    ],
-  },
-  {
-    path: '/ai-providers/openai/:index',
-    element: <AiProvidersOpenAIEditLayout />,
-    requiredRoute: '/ai-providers',
-    children: [
-      { index: true, element: <AiProvidersOpenAIEditPage /> },
-      { path: 'models', element: <AiProvidersOpenAIModelsPage /> },
-    ],
-  },
-  { path: '/ai-providers/ampcode', element: <AiProvidersAmpcodeEditPage />, requiredRoute: '/ai-providers' },
-  { path: '/ai-providers', element: <AiProvidersPage />, requiredRoute: '/ai-providers' },
-  { path: '/ai-providers/*', element: <AiProvidersPage />, requiredRoute: '/ai-providers' },
+  { path: '/ai-providers', element: <ProvidersWorkbenchPage />, requiredRoute: '/ai-providers' },
+  { path: '/ai-providers/*', element: <Navigate to="/ai-providers" replace />, requiredRoute: '/ai-providers' },
   { path: '/auth-files', element: <AuthFilesPage />, requiredRoute: '/auth-files' },
   { path: '/auth-files/oauth-excluded', element: <AuthFilesOAuthExcludedEditPage />, requiredRoute: '/auth-files' },
   { path: '/auth-files/oauth-model-alias', element: <AuthFilesOAuthModelAliasEditPage />, requiredRoute: '/auth-files' },
@@ -110,30 +50,16 @@ const mainRoutes: RouteConfig[] = [
   { path: '*', element: <Navigate to="/" replace /> },
 ];
 
-const filterRoutes = (routes: RouteConfig[], allowedRoutes: string[]): RouteObject[] =>
-  routes
-    .filter((route) => isAllowedRoute(allowedRoutes, route.requiredRoute))
-    .map(({ requiredRoute: _requiredRoute, children, ...route }) => {
-      if (route.index) {
-        return {
-          index: true,
-          element: route.element
-        } satisfies RouteObject;
-      }
-
-      return {
-        path: route.path,
-        element: route.element,
-        children: children ? filterRoutes(children, allowedRoutes) : undefined
-      } satisfies RouteObject;
-    });
-
 export function MainRoutes({
   location,
-  allowedRoutes
+  allowedRoutes = []
 }: {
   location?: Location;
-  allowedRoutes: string[];
+  allowedRoutes?: string[];
 }) {
-  return useRoutes(filterRoutes(mainRoutes, allowedRoutes), location);
+  const routes =
+    allowedRoutes.length > 0
+      ? mainRoutes.filter((route) => isAllowedRoute(allowedRoutes, route.requiredRoute))
+      : mainRoutes;
+  return useRoutes(routes, location);
 }

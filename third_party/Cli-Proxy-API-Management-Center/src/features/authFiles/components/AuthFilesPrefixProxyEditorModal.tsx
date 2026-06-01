@@ -142,6 +142,18 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
                     disabled={disableControls || editor.saving || !editor.json}
                     onChange={(e) => onChange('priority', e.target.value)}
                   />
+                  {editor.providerKey === 'codex' && (
+                    <div className="form-group">
+                      <label>{t('auth_files.codex_websockets_label')}</label>
+                      <ToggleSwitch
+                        checked={editor.websockets}
+                        onChange={(value) => onChange('websockets', value)}
+                        disabled={disableControls || editor.saving || !editor.json}
+                        ariaLabel={t('auth_files.codex_websockets_label')}
+                      />
+                      <div className="hint">{t('auth_files.codex_websockets_hint')}</div>
+                    </div>
+                  )}
                   <div className="form-group">
                     <label>{t('auth_files.excluded_models_label')}</label>
                     <textarea

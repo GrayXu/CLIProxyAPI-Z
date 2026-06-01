@@ -1,16 +1,10 @@
 package executor
 
 import (
-	"context"
-	"errors"
-	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
-
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 func TestParseCodexRetryAfter(t *testing.T) {
@@ -79,129 +73,6 @@ func TestNewCodexStatusErrTreatsCapacityAsRetryableRateLimit(t *testing.T) {
 	}
 }
 
-func TestExtractCodexWeeklyResetAt(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0).UTC()
-
-	t.Run("prefers weekly window by duration", func(t *testing.T) {
-		resetAt := now.Add(3 * time.Hour).Unix()
-		body := []byte(`{"rate_limit":{"primary_window":{"limit_window_seconds":18000,"reset_at":1},"secondary_window":{"limit_window_seconds":604800,"reset_at":` + itoa(resetAt) + `}}}`)
-		got, ok := extractCodexWeeklyResetAt(body, now)
-		if !ok {
-			t.Fatalf("expected weekly reset, got none")
-		}
-		if !got.Equal(time.Unix(resetAt, 0).UTC()) {
-			t.Fatalf("weekly reset = %v, want %v", got, time.Unix(resetAt, 0).UTC())
-		}
-	})
-
-	t.Run("falls back to secondary window for legacy payload", func(t *testing.T) {
-		resetAt := now.Add(2 * time.Hour).Unix()
-		body := []byte(`{"rate_limit":{"primary_window":{"reset_at":1},"secondary_window":{"reset_at":` + itoa(resetAt) + `}}}`)
-		got, ok := extractCodexWeeklyResetAt(body, now)
-		if !ok {
-			t.Fatalf("expected weekly reset, got none")
-		}
-		if !got.Equal(time.Unix(resetAt, 0).UTC()) {
-			t.Fatalf("weekly reset = %v, want %v", got, time.Unix(resetAt, 0).UTC())
-		}
-	})
-
-	t.Run("uses reset_after_seconds when reset_at missing", func(t *testing.T) {
-		body := []byte(`{"rate_limit":{"secondary_window":{"limit_window_seconds":604800,"reset_after_seconds":600}}}`)
-		got, ok := extractCodexWeeklyResetAt(body, now)
-		if !ok {
-			t.Fatalf("expected weekly reset, got none")
-		}
-		want := now.Add(10 * time.Minute)
-		if !got.Equal(want) {
-			t.Fatalf("weekly reset = %v, want %v", got, want)
-		}
-	})
-
-	t.Run("ignores code review weekly window", func(t *testing.T) {
-		body := []byte(`{"code_review_rate_limit":{"secondary_window":{"limit_window_seconds":604800,"reset_after_seconds":600}}}`)
-		if got, ok := extractCodexWeeklyResetAt(body, now); ok {
-			t.Fatalf("expected no weekly reset, got %v", got)
-		}
-	})
-}
-
-func TestRefreshQuotaSnapshot_PreservesExistingWeeklyResetWithoutRecognizableWeeklyWindow(t *testing.T) {
-	t.Parallel()
-
-	now := time.Unix(1_700_000_000, 0).UTC()
-	existingReset := now.Add(2 * time.Hour).UTC()
-	auth := &cliproxyauth.Auth{
-		ID: "codex-auth",
-		Metadata: map[string]any{
-			"access_token":            "token",
-			"account_id":              "account",
-			"routing_weekly_reset_at": existingReset.Format(time.RFC3339),
-		},
-	}
-
-	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", codexRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		body := `{"rate_limit":{"daily_window":{"limit_window_seconds":86400,"reset_after_seconds":30}}}`
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(body)),
-		}, nil
-	}))
-
-	exec := NewCodexExecutor(nil)
-	exec.refreshQuotaSnapshot(ctx, auth, now)
-
-	if got := auth.Metadata["routing_weekly_reset_at"]; got != existingReset.Format(time.RFC3339) {
-		t.Fatalf("routing_weekly_reset_at = %v, want %v", got, existingReset.Format(time.RFC3339))
-	}
-	if got := auth.Metadata["routing_weekly_snapshot_at"]; got != now.Format(time.RFC3339) {
-		t.Fatalf("routing_weekly_snapshot_at = %v, want %v", got, now.Format(time.RFC3339))
-	}
-	if got := auth.Metadata["codex_quota_snapshot"]; got != `{"rate_limit":{"daily_window":{"limit_window_seconds":86400,"reset_after_seconds":30}}}` {
-		t.Fatalf("codex_quota_snapshot = %v, want payload", got)
-	}
-}
-
-func TestRefreshQuotaSnapshot_PreservesExistingWeeklyResetOnFetchError(t *testing.T) {
-	t.Parallel()
-
-	now := time.Unix(1_700_000_000, 0).UTC()
-	existingReset := now.Add(2 * time.Hour).UTC()
-	existingSnapshot := now.Add(-20 * time.Minute).UTC()
-	auth := &cliproxyauth.Auth{
-		ID: "codex-auth",
-		Metadata: map[string]any{
-			"access_token":               "token",
-			"account_id":                 "account",
-			"routing_weekly_reset_at":    existingReset.Format(time.RFC3339),
-			"routing_weekly_snapshot_at": existingSnapshot.Format(time.RFC3339),
-		},
-	}
-
-	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", codexRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("boom")
-	}))
-
-	exec := NewCodexExecutor(nil)
-	exec.refreshQuotaSnapshot(ctx, auth, now)
-
-	if got := auth.Metadata["routing_weekly_reset_at"]; got != existingReset.Format(time.RFC3339) {
-		t.Fatalf("routing_weekly_reset_at = %v, want %v", got, existingReset.Format(time.RFC3339))
-	}
-	if got := auth.Metadata["routing_weekly_snapshot_at"]; got != existingSnapshot.Format(time.RFC3339) {
-		t.Fatalf("routing_weekly_snapshot_at = %v, want %v", got, existingSnapshot.Format(time.RFC3339))
-	}
-	if _, ok := auth.Metadata["codex_quota_snapshot"]; ok {
-		t.Fatalf("codex_quota_snapshot unexpectedly set")
-	}
-}
-
-type codexRoundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (fn codexRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return fn(req)
-}
 func itoa(v int64) string {
 	return strconv.FormatInt(v, 10)
 }

@@ -39,7 +39,7 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
       targets: AuthFileItem[],
       scope: QuotaScope,
       setLoading: (loading: boolean, scope?: QuotaScope | null) => void,
-      options?: QuotaLoadOptions
+      _options?: QuotaLoadOptions
     ) => {
       if (loadingRef.current) return;
       loadingRef.current = true;
@@ -60,7 +60,7 @@ export function useQuotaLoader<TState, TData>(config: QuotaConfig<TState, TData>
         const results = await Promise.all(
           targets.map(async (file): Promise<LoadQuotaResult<TData>> => {
             try {
-              const data = await config.fetchQuota(file, t, options);
+              const data = await config.fetchQuota(file, t);
               return { name: file.name, status: 'success', data };
             } catch (err: unknown) {
               const message = err instanceof Error ? err.message : t('common.unknown_error');
