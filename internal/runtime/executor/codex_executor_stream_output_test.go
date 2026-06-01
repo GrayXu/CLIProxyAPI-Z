@@ -169,6 +169,16 @@ func statusCodeFromTestError(t *testing.T, err error) int {
 	return statusErr.StatusCode()
 }
 
+func assertCodexErrorCode(t *testing.T, errText, wantType, wantCode string) {
+	t.Helper()
+	if !strings.Contains(errText, wantType) {
+		t.Fatalf("error %q missing type %q", errText, wantType)
+	}
+	if !strings.Contains(errText, wantCode) {
+		t.Fatalf("error %q missing code %q", errText, wantCode)
+	}
+}
+
 func TestCodexExecutorExecuteStream_EmptyStreamCompletionOutputUsesOutputItemDone(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

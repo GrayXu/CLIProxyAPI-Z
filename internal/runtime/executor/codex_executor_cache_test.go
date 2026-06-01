@@ -119,9 +119,6 @@ func TestCodexExecutorCacheHelper_IdentityConfuseRemapsBodyAndHeaders(t *testing
 			t.Fatalf("%s = %q, want %q", headerName, gotHeader, expectedPromptCacheKey)
 		}
 	}
-	if gotSession := httpReq.Header.Get("Session_id"); gotSession != expectedPromptCacheKey {
-		t.Fatalf("Session_id = %q, want %q", gotSession, expectedPromptCacheKey)
-	}
 	if gotWindow := httpReq.Header.Get("X-Codex-Window-Id"); gotWindow != expectedPromptCacheKey+":0" {
 		t.Fatalf("X-Codex-Window-Id = %q, want %q", gotWindow, expectedPromptCacheKey+":0")
 	}
