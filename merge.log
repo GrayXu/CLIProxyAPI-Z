@@ -3,6 +3,44 @@
 Append new entries at the top. Record upstream syncs, management-center subtree
 updates, conflict decisions, validation scope, and push/deploy status.
 
+## 2026-06-01 - upstream/main + management-center/main sync
+
+- Branch: `merge/upstream-management-20260601`
+- Previous origin/main: `196678fd`
+- Upstream merged: `upstream/main` at `05b97247`
+- Management center merged: `management-center/main` at `75da3031`
+- Merge commits:
+  - `8164a7f3 chore(merge): merge upstream backend updates`
+  - `fc4a9b32 chore(webui): merge management center updates`
+  - `d56b60f8 fix(test): align executor tests with upstream behavior`
+- Conflict decisions:
+  - Preserved fork behavior for durable usage statistics, Redis RESP/home-mode gating, sticky/quota-smart routing hooks, `service_tier`, and `requested_fast_mode`.
+  - Merged upstream TTFT and reasoning/service-tier usage metadata with fork fast-mode fields in usage queue payloads.
+  - Kept upstream request-auth preparation and downstream websocket fallback sanitization while preserving fork quota-smart prewarm/success tracking.
+  - Adopted upstream Management WebUI provider workbench and removed the superseded per-provider edit pages.
+  - Reintroduced fork Management WebUI capabilities on top of the upstream workbench: session route filtering, Usage navigation/page, auth-file excluded-models and disable-cooling editing, `quota-sticky`, 30d usage, fast-mode usage fields, and advanced pricing fields.
+  - Kept npm-based local build compatibility by retaining `package-lock.json` and changing the repo build script to `npm ci --no-audit --prefer-offline`; upstream also contributed `bun.lock`.
+- Generated assets:
+  - Ran `scripts/build-management-html.sh`.
+  - Updated `third_party/Cli-Proxy-API-Management-Center/dist/index.html`.
+  - Updated `internal/managementasset/bundled/management.html`.
+- Validation:
+  - `scripts/build-management-html.sh`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go build -p=1 -o /tmp/cliproxyapi-server-merge-verify ./cmd/server`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go test -p=1 ./internal/...`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go test -p=1 ./sdk/...`
+  - `GOMAXPROCS=1 GOMEMLIMIT=700MiB go test -p=1 ./test/...`
+- Deployment:
+  - Built release binary `/tmp/cliproxyapi-d56b60f8` with version `v7.1.37-68-gd56b60f8`.
+  - Backed up previous binary and runtime Management HTML to `/var/lib/cliproxyapi/backups/deploy-20260601T075656Z`.
+  - Installed `/usr/local/bin/cliproxyapi` and `/var/lib/cliproxyapi/static/management.html`, then restarted `cliproxyapi.service`.
+  - Verified `cliproxyapi.service` is `active/running` with `MainPID=2968009`.
+  - Verified `GET http://127.0.0.1:8317/healthz` returned `200` and `{"status":"ok"}`.
+  - Verified `GET http://127.0.0.1:8317/management.html` returned `200` with `2346974` bytes.
+  - Verified runtime static HTML, live HTTP HTML, and bundled HTML all have sha256 `5aa36335388edae09938f178f4b1327c6189b6207f65ad823325b3b634f7353b`.
+- Push:
+  - Pending push after recording this entry.
+
 ## 2026-05-19 - upstream/main + management-center/main sync
 
 - Branch: `main`
