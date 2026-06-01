@@ -39,7 +39,8 @@ updates, conflict decisions, validation scope, and push/deploy status.
   - Verified `GET http://127.0.0.1:8317/management.html` returned `200` with `2346974` bytes.
   - Verified runtime static HTML, live HTTP HTML, and bundled HTML all have sha256 `5aa36335388edae09938f178f4b1327c6189b6207f65ad823325b3b634f7353b`.
 - Push:
-  - Pending push after recording this entry.
+  - Pushed `merge/upstream-management-20260601` to `origin`.
+  - GitHub PR URL: `https://github.com/GrayXu/CLIProxyAPI-Z/pull/new/merge/upstream-management-20260601`.
 
 ## 2026-05-19 - upstream/main + management-center/main sync
 
