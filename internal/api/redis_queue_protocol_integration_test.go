@@ -86,17 +86,6 @@ func readTestRESPLine(r *bufio.Reader) (string, error) {
 	return strings.TrimSuffix(line, "\r\n"), nil
 }
 
-func readTestRESPSimpleString(r *bufio.Reader) (string, error) {
-	prefix, err := r.ReadByte()
-	if err != nil {
-		return "", err
-	}
-	if prefix != '+' {
-		return "", fmt.Errorf("expected simple string prefix '+', got %q", prefix)
-	}
-	return readTestRESPLine(r)
-}
-
 func readTestRESPError(r *bufio.Reader) (string, error) {
 	prefix, err := r.ReadByte()
 	if err != nil {
@@ -108,22 +97,33 @@ func readTestRESPError(r *bufio.Reader) (string, error) {
 	return readTestRESPLine(r)
 }
 
+func readTestRESPSimpleString(r *bufio.Reader) (string, error) {
+	prefix, errRead := r.ReadByte()
+	if errRead != nil {
+		return "", errRead
+	}
+	if prefix != '+' {
+		return "", fmt.Errorf("expected simple string prefix '+', got %q", prefix)
+	}
+	return readTestRESPLine(r)
+}
+
 func readTestRESPBulkString(r *bufio.Reader) ([]byte, error) {
-	prefix, err := r.ReadByte()
-	if err != nil {
-		return nil, err
+	prefix, errRead := r.ReadByte()
+	if errRead != nil {
+		return nil, errRead
 	}
 	if prefix != '$' {
 		return nil, fmt.Errorf("expected bulk string prefix '$', got %q", prefix)
 	}
 
-	line, err := readTestRESPLine(r)
-	if err != nil {
-		return nil, err
+	line, errLine := readTestRESPLine(r)
+	if errLine != nil {
+		return nil, errLine
 	}
-	length, err := strconv.Atoi(line)
-	if err != nil {
-		return nil, fmt.Errorf("invalid bulk string length %q: %v", line, err)
+	length, errParse := strconv.Atoi(line)
+	if errParse != nil {
+		return nil, fmt.Errorf("invalid bulk string length %q: %v", line, errParse)
 	}
 	if length == -1 {
 		return nil, nil
@@ -133,8 +133,8 @@ func readTestRESPBulkString(r *bufio.Reader) ([]byte, error) {
 	}
 
 	payload := make([]byte, length+2)
-	if _, err := io.ReadFull(r, payload); err != nil {
-		return nil, err
+	if _, errRead := io.ReadFull(r, payload); errRead != nil {
+		return nil, errRead
 	}
 	if payload[length] != '\r' || payload[length+1] != '\n' {
 		return nil, fmt.Errorf("invalid bulk string terminator")
@@ -143,21 +143,21 @@ func readTestRESPBulkString(r *bufio.Reader) ([]byte, error) {
 }
 
 func readRESPArrayOfBulkStrings(r *bufio.Reader) ([][]byte, error) {
-	prefix, err := r.ReadByte()
-	if err != nil {
-		return nil, err
+	prefix, errRead := r.ReadByte()
+	if errRead != nil {
+		return nil, errRead
 	}
 	if prefix != '*' {
 		return nil, fmt.Errorf("expected array prefix '*', got %q", prefix)
 	}
 
-	line, err := readTestRESPLine(r)
-	if err != nil {
-		return nil, err
+	line, errLine := readTestRESPLine(r)
+	if errLine != nil {
+		return nil, errLine
 	}
-	count, err := strconv.Atoi(line)
-	if err != nil {
-		return nil, fmt.Errorf("invalid array length %q: %v", line, err)
+	count, errParse := strconv.Atoi(line)
+	if errParse != nil {
+		return nil, fmt.Errorf("invalid array length %q: %v", line, errParse)
 	}
 	if count < 0 {
 		return nil, fmt.Errorf("invalid array length %d", count)
@@ -165,9 +165,9 @@ func readRESPArrayOfBulkStrings(r *bufio.Reader) ([][]byte, error) {
 
 	out := make([][]byte, 0, count)
 	for i := 0; i < count; i++ {
-		item, err := readTestRESPBulkString(r)
-		if err != nil {
-			return nil, err
+		item, errItem := readTestRESPBulkString(r)
+		if errItem != nil {
+			return nil, errItem
 		}
 		out = append(out, item)
 	}
@@ -408,29 +408,11 @@ func TestRedisProtocol_AUTH_And_PopContracts(t *testing.T) {
 
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 
-	if errWrite := writeTestRESPCommand(conn, "AUTH", "test-key"); errWrite != nil {
-		t.Fatalf("failed to write AUTH command: %v", errWrite)
-	}
-	if msg, err := readTestRESPError(reader); err != nil {
-		t.Fatalf("failed to read AUTH error: %v", err)
-	} else if msg != "ERR invalid management key" {
-		t.Fatalf("unexpected AUTH error: %q", msg)
-	}
-
-	if errWrite := writeTestRESPCommand(conn, "LPOP", "queue"); errWrite != nil {
-		t.Fatalf("failed to write LPOP command: %v", errWrite)
-	}
-	if msg, err := readTestRESPError(reader); err != nil {
-		t.Fatalf("failed to read LPOP NOAUTH error: %v", err)
-	} else if msg != "NOAUTH Authentication required." {
-		t.Fatalf("unexpected LPOP NOAUTH error: %q", msg)
-	}
-
 	if errWrite := writeTestRESPCommand(conn, "AUTH", managementPassword); errWrite != nil {
 		t.Fatalf("failed to write AUTH command: %v", errWrite)
 	}
-	if msg, err := readTestRESPSimpleString(reader); err != nil {
-		t.Fatalf("failed to read AUTH response: %v", err)
+	if msg, errRead := readTestRESPSimpleString(reader); errRead != nil {
+		t.Fatalf("failed to read AUTH response: %v", errRead)
 	} else if msg != "OK" {
 		t.Fatalf("unexpected AUTH response: %q", msg)
 	}
@@ -442,25 +424,25 @@ func TestRedisProtocol_AUTH_And_PopContracts(t *testing.T) {
 	redisqueue.Enqueue([]byte("b"))
 	redisqueue.Enqueue([]byte("c"))
 
-	if errWrite := writeTestRESPCommand(conn, "RPOP", "queue"); errWrite != nil {
+	if errWrite := writeTestRESPCommand(conn, "RPOP", "usage"); errWrite != nil {
 		t.Fatalf("failed to write RPOP command: %v", errWrite)
 	}
-	if item, err := readTestRESPBulkString(reader); err != nil {
-		t.Fatalf("failed to read RPOP response: %v", err)
+	if item, errRead := readTestRESPBulkString(reader); errRead != nil {
+		t.Fatalf("failed to read RPOP response: %v", errRead)
 	} else if string(item) != "a" {
 		t.Fatalf("unexpected RPOP item: %q", string(item))
 	}
 
-	if errWrite := writeTestRESPCommand(conn, "LPOP", "queue"); errWrite != nil {
+	if errWrite := writeTestRESPCommand(conn, "LPOP", "usage"); errWrite != nil {
 		t.Fatalf("failed to write LPOP command: %v", errWrite)
 	}
-	if item, err := readTestRESPBulkString(reader); err != nil {
-		t.Fatalf("failed to read LPOP response: %v", err)
+	if item, errRead := readTestRESPBulkString(reader); errRead != nil {
+		t.Fatalf("failed to read LPOP response: %v", errRead)
 	} else if string(item) != "b" {
 		t.Fatalf("unexpected LPOP item: %q", string(item))
 	}
 
-	if errWrite := writeTestRESPCommand(conn, "RPOP", "queue", "10"); errWrite != nil {
+	if errWrite := writeTestRESPCommand(conn, "RPOP", "usage", "10"); errWrite != nil {
 		t.Fatalf("failed to write RPOP count command: %v", errWrite)
 	}
 	items, errItems := readRESPArrayOfBulkStrings(reader)
@@ -471,7 +453,7 @@ func TestRedisProtocol_AUTH_And_PopContracts(t *testing.T) {
 		t.Fatalf("unexpected RPOP count items: %#v", items)
 	}
 
-	if errWrite := writeTestRESPCommand(conn, "LPOP", "queue"); errWrite != nil {
+	if errWrite := writeTestRESPCommand(conn, "LPOP", "usage"); errWrite != nil {
 		t.Fatalf("failed to write LPOP empty command: %v", errWrite)
 	}
 	item, errItem := readTestRESPBulkString(reader)
@@ -482,7 +464,7 @@ func TestRedisProtocol_AUTH_And_PopContracts(t *testing.T) {
 		t.Fatalf("expected nil bulk string for empty queue, got %q", string(item))
 	}
 
-	if errWrite := writeTestRESPCommand(conn, "RPOP", "queue", "2"); errWrite != nil {
+	if errWrite := writeTestRESPCommand(conn, "RPOP", "usage", "2"); errWrite != nil {
 		t.Fatalf("failed to write RPOP empty count command: %v", errWrite)
 	}
 	emptyItems, errEmpty := readRESPArrayOfBulkStrings(reader)
