@@ -103,7 +103,7 @@ export type VisualConfigValues = {
   quotaAntigravityCredits: boolean;
   routingSessionAffinity: boolean;
   routingSessionAffinityTTL: string;
-  routingStrategy: 'round-robin' | 'fill-first' | 'quota-sticky' | 'quota-smart';
+  routingStrategy: 'round-robin' | 'fill-first' | 'quota-smart';
   wsAuth: boolean;
   enableGeminiCliEndpoint: boolean;
   antigravitySignatureCacheEnabled: boolean;

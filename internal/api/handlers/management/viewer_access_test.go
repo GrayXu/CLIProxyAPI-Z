@@ -35,7 +35,7 @@ func TestViewerKeyAccessWithoutManagementSecret(t *testing.T) {
 		RemoteManagement:       config.RemoteManagement{AllowRemote: true},
 		LoggingToFile:          true,
 		UsageStatisticsEnabled: true,
-		Routing:                config.RoutingConfig{Strategy: "quota-sticky"},
+		Routing:                config.RoutingConfig{Strategy: "quota-smart"},
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v0/management/session", nil)
@@ -64,7 +64,7 @@ func TestViewerConfigIsRedacted(t *testing.T) {
 		RemoteManagement:       config.RemoteManagement{AllowRemote: true},
 		LoggingToFile:          true,
 		UsageStatisticsEnabled: true,
-		Routing:                config.RoutingConfig{Strategy: "quota-sticky"},
+		Routing:                config.RoutingConfig{Strategy: "quota-smart"},
 		GeminiKey:              []config.GeminiKey{{APIKey: "secret-gemini"}},
 	})
 

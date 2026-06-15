@@ -137,7 +137,7 @@ func TestServiceRunAndReloadKeepSessionAffinitySelector(t *testing.T) {
 		Port:    0,
 		AuthDir: filepath.Join(tmpDir, "auth"),
 		Routing: internalconfig.RoutingConfig{
-			Strategy:           "quota-sticky",
+			Strategy:           "fill-first",
 			SessionAffinity:    true,
 			SessionAffinityTTL: "90m",
 		},
@@ -176,8 +176,8 @@ func TestServiceRunAndReloadKeepSessionAffinitySelector(t *testing.T) {
 	if selectorType != "*auth.SessionAffinitySelector" {
 		t.Fatalf("selector before run = %q, want %q", selectorType, "*auth.SessionAffinitySelector")
 	}
-	if fallbackType != "*auth.QuotaStickySelector" {
-		t.Fatalf("fallback before run = %q, want %q", fallbackType, "*auth.QuotaStickySelector")
+	if fallbackType != "*auth.FillFirstSelector" {
+		t.Fatalf("fallback before run = %q, want %q", fallbackType, "*auth.FillFirstSelector")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -198,8 +198,8 @@ func TestServiceRunAndReloadKeepSessionAffinitySelector(t *testing.T) {
 	if selectorType != "*auth.SessionAffinitySelector" {
 		t.Fatalf("selector after run = %q, want %q", selectorType, "*auth.SessionAffinitySelector")
 	}
-	if fallbackType != "*auth.QuotaStickySelector" {
-		t.Fatalf("fallback after run = %q, want %q", fallbackType, "*auth.QuotaStickySelector")
+	if fallbackType != "*auth.FillFirstSelector" {
+		t.Fatalf("fallback after run = %q, want %q", fallbackType, "*auth.FillFirstSelector")
 	}
 
 	if reload == nil {

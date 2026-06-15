@@ -913,12 +913,6 @@ export function VisualConfigEditor({
                             ),
                           },
                           {
-                            value: 'quota-sticky',
-                            label: t(
-                              'config_management.visual.sections.network.strategy_quota_sticky'
-                            ),
-                          },
-                          {
                             value: 'quota-smart',
                             label: t(
                               'config_management.visual.sections.network.strategy_quota_smart'

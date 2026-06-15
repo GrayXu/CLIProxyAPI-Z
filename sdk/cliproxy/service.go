@@ -428,8 +428,6 @@ func normalizeRoutingStrategy(strategy string) string {
 	switch strings.ToLower(strings.TrimSpace(strategy)) {
 	case "fill-first", "fillfirst", "ff":
 		return "fill-first"
-	case "quota-sticky", "quotasticky", "qs":
-		return "quota-sticky"
 	case "quota-smart", "quotasmart", "qsm", "codex-quota-smart", "codexquotasmart", "cqs":
 		return "quota-smart"
 	default:
@@ -441,8 +439,6 @@ func selectorForRoutingStrategy(strategy string) coreauth.Selector {
 	switch normalizeRoutingStrategy(strategy) {
 	case "fill-first":
 		return &coreauth.FillFirstSelector{}
-	case "quota-sticky":
-		return &coreauth.QuotaStickySelector{}
 	case "quota-smart":
 		return &coreauth.CodexQuotaSmartSelector{}
 	default:

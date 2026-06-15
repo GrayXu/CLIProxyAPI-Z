@@ -19,8 +19,7 @@ const (
 	schedulerStrategyCustom          schedulerStrategy = 0
 	schedulerStrategyRoundRobin      schedulerStrategy = 1
 	schedulerStrategyFillFirst       schedulerStrategy = 2
-	schedulerStrategyQuotaSticky     schedulerStrategy = 3
-	schedulerStrategyCodexQuotaSmart schedulerStrategy = 4
+	schedulerStrategyCodexQuotaSmart schedulerStrategy = 3
 )
 
 // scheduledState describes how an auth currently participates in a model shard.
@@ -186,8 +185,6 @@ func selectorStrategy(selector Selector) schedulerStrategy {
 	switch selector.(type) {
 	case *FillFirstSelector:
 		return schedulerStrategyFillFirst
-	case *QuotaStickySelector:
-		return schedulerStrategyQuotaSticky
 	case *CodexQuotaSmartSelector:
 		return schedulerStrategyCodexQuotaSmart
 	case nil, *RoundRobinSelector:
@@ -405,31 +402,6 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 			if picked != nil {
 				return picked, providerKey, nil
 			}
-		}
-		return nil, "", s.mixedUnavailableErrorLocked(normalized, model, tried)
-	}
-
-	if s.strategy == schedulerStrategyQuotaSticky {
-		var (
-			bestAuth     *Auth
-			bestProvider string
-		)
-		for providerIndex, providerKey := range normalized {
-			shard := candidateShards[providerIndex]
-			if shard == nil {
-				continue
-			}
-			picked := shard.pickReadyAtPriorityLocked(false, bestPriority, schedulerStrategyQuotaSticky, predicate)
-			if picked == nil {
-				continue
-			}
-			if betterAuthByQuotaScore(picked, bestAuth, model) {
-				bestAuth = picked
-				bestProvider = providerKey
-			}
-		}
-		if bestAuth != nil {
-			return bestAuth, bestProvider, nil
 		}
 		return nil, "", s.mixedUnavailableErrorLocked(normalized, model, tried)
 	}
@@ -979,8 +951,6 @@ func (m *modelScheduler) pickReadyAtPriorityLocked(preferWebsocket bool, priorit
 	var picked *scheduledAuth
 	if strategy == schedulerStrategyFillFirst {
 		picked = view.pickFillFirst(predicate)
-	} else if strategy == schedulerStrategyQuotaSticky {
-		picked = view.pickHighestQuotaScore(m.modelKey, predicate)
 	} else if strategy == schedulerStrategyCodexQuotaSmart {
 		picked = pickCodexQuotaSmartReady(view.flat, m.modelKey, &view.cursor, predicate)
 	} else {

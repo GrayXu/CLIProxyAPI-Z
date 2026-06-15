@@ -195,11 +195,10 @@
     "ws_auth_enable": "Требовать аутентификацию для /ws/*",
     "routing_title": "Стратегия маршрутизации",
     "routing_strategy_label": "Стратегия маршрутизации:",
-    "routing_strategy_hint": "round-robin циклически перебирает ключи; fill-first отдаёт приоритет первому доступному ключу; quota-sticky удерживает привязки с учётом квот; quota-smart планирует окна квот Codex.",
+    "routing_strategy_hint": "round-robin циклически перебирает ключи; fill-first отдаёт приоритет первому доступному ключу; quota-smart планирует окна квот Codex.",
     "routing_strategy_update": "Обновить",
     "routing_strategy_round_robin": "round-robin (цикл)",
     "routing_strategy_fill_first": "fill-first (приоритет)",
-    "routing_strategy_quota_sticky": "quota-sticky (привязка по квоте)",
     "routing_strategy_quota_smart": "quota-smart (планирование квот)"
   },
   "api_keys": {
@@ -1069,7 +1068,6 @@
           "routing_strategy_hint": "Выберите стратегию подбора учётных данных",
           "strategy_round_robin": "По кругу",
           "strategy_fill_first": "Сначала заполнить",
-          "strategy_quota_sticky": "Привязка по квоте",
           "strategy_quota_smart": "Планирование квот",
           "session_affinity_ttl": "TTL привязки сессии",
           "force_model_prefix": "Принудительный префикс модели",

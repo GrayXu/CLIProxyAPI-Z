@@ -1022,11 +1022,9 @@ export function useVisualConfig() {
         routingStrategy:
           routing?.strategy === 'quota-smart' || routing?.strategy === 'codex-quota-smart'
             ? 'quota-smart'
-            : routing?.strategy === 'quota-sticky'
-              ? 'quota-sticky'
-              : routing?.strategy === 'fill-first'
-                ? 'fill-first'
-                : 'round-robin',
+            : routing?.strategy === 'fill-first'
+              ? 'fill-first'
+              : 'round-robin',
         routingSessionAffinity: Boolean(
           routing?.['session-affinity'] ?? routing?.sessionAffinity ?? routing?.['sessionAffinity']
         ),

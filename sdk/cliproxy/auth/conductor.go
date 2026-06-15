@@ -262,7 +262,7 @@ func (m *Manager) hasPluginScheduler() bool {
 
 func isBuiltInSelector(selector Selector) bool {
 	switch selector.(type) {
-	case *RoundRobinSelector, *FillFirstSelector, *QuotaStickySelector, *CodexQuotaSmartSelector:
+	case *RoundRobinSelector, *FillFirstSelector, *CodexQuotaSmartSelector:
 		return true
 	default:
 		return false
@@ -424,13 +424,7 @@ func (m *Manager) SetSelector(selector Selector) {
 }
 
 func (m *Manager) stickyRoutingEnabled() bool {
-	if m == nil {
-		return false
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, ok := m.selector.(*QuotaStickySelector)
-	return ok
+	return false
 }
 
 func (m *Manager) codexQuotaSmartEnabled() bool {
