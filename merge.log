@@ -36,7 +36,7 @@ updates, conflict decisions, validation scope, and push/deploy status.
   - Verified `GET http://127.0.0.1:8317/management.html` returned `200` with `2465523` bytes.
   - Verified runtime static HTML, live HTTP HTML, and bundled HTML all have sha256 `26e0d370ef0c62d42f93a9368243bc116295a1e62b51c296044073f1265c955b`.
 - Push:
-  - Pending.
+  - Pushed `merge/upstream-management-20260615` to `origin/main` as `a353f2fe`.
 
 ## 2026-06-01 - upstream/main + management-center/main sync
 
