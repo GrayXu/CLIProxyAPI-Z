@@ -196,10 +196,12 @@
     "ws_auth_enable": "啟用 /ws/* 驗證",
     "routing_title": "路由策略",
     "routing_strategy_label": "路由策略:",
-    "routing_strategy_hint": "round-robin 為輪詢，fill-first 為優先填充。",
+    "routing_strategy_hint": "round-robin 為輪詢，fill-first 為優先填充，quota-sticky 為配額黏性，quota-smart 為 Codex 配額智慧調度。",
     "routing_strategy_update": "更新",
     "routing_strategy_round_robin": "round-robin（輪詢）",
-    "routing_strategy_fill_first": "fill-first（優先填充）"
+    "routing_strategy_fill_first": "fill-first（優先填充）",
+    "routing_strategy_quota_sticky": "quota-sticky（配額黏性）",
+    "routing_strategy_quota_smart": "quota-smart（配額智慧）"
   },
   "api_keys": {
     "title": "API 金鑰管理",
@@ -1106,6 +1108,8 @@
           "routing_strategy_hint": "選擇憑證選擇策略",
           "strategy_round_robin": "輪詢（Round Robin）",
           "strategy_fill_first": "填充優先（Fill First）",
+          "strategy_quota_sticky": "配額黏性（Quota Sticky）",
+          "strategy_quota_smart": "配額智慧（Quota Smart）",
           "session_affinity_ttl": "會話黏性 TTL",
           "force_model_prefix": "強制模型前綴",
           "force_model_prefix_desc": "未帶前綴的模型請求只使用無前綴憑證",

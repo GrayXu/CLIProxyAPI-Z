@@ -912,6 +912,18 @@ export function VisualConfigEditor({
                               'config_management.visual.sections.network.strategy_fill_first'
                             ),
                           },
+                          {
+                            value: 'quota-sticky',
+                            label: t(
+                              'config_management.visual.sections.network.strategy_quota_sticky'
+                            ),
+                          },
+                          {
+                            value: 'quota-smart',
+                            label: t(
+                              'config_management.visual.sections.network.strategy_quota_smart'
+                            ),
+                          },
                         ]}
                         id={`${routingStrategyLabelId}-select`}
                         disabled={disabled}

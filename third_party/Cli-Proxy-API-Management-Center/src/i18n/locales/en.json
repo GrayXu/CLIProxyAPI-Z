@@ -196,10 +196,12 @@
     "ws_auth_enable": "Require auth for /ws/*",
     "routing_title": "Routing Strategy",
     "routing_strategy_label": "Routing strategy:",
-    "routing_strategy_hint": "round-robin cycles through keys; fill-first prioritizes the first available key.",
+    "routing_strategy_hint": "round-robin cycles through keys; fill-first prioritizes the first available key; quota-sticky keeps quota-aware bindings; quota-smart schedules Codex quota windows.",
     "routing_strategy_update": "Update",
     "routing_strategy_round_robin": "round-robin (cycle)",
-    "routing_strategy_fill_first": "fill-first (prioritize)"
+    "routing_strategy_fill_first": "fill-first (prioritize)",
+    "routing_strategy_quota_sticky": "quota-sticky (quota affinity)",
+    "routing_strategy_quota_smart": "quota-smart (quota scheduling)"
   },
   "api_keys": {
     "title": "API Keys Management",
@@ -1080,6 +1082,8 @@
           "routing_strategy_hint": "Select credential selection strategy",
           "strategy_round_robin": "Round Robin",
           "strategy_fill_first": "Fill First",
+          "strategy_quota_sticky": "Quota Sticky",
+          "strategy_quota_smart": "Quota Smart",
           "session_affinity_ttl": "Session Affinity TTL",
           "force_model_prefix": "Force Model Prefix",
           "force_model_prefix_desc": "Unprefixed model requests only use credentials without prefix",
