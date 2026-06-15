@@ -176,6 +176,21 @@ func UpdateCodexQuotaSmartStateFromSnapshot(auth *Auth, payload string, snapshot
 	StoreCodexQuotaSmartState(auth, state)
 }
 
+func StoreCodexQuotaRoutingSnapshot(auth *Auth, payload string, snapshotAt time.Time) {
+	StoreCodexQuotaSnapshot(auth, payload, snapshotAt)
+	UpdateCodexQuotaSmartStateFromSnapshot(auth, payload, snapshotAt)
+
+	_, weekly, _ := extractCodexQuotaSmartSnapshot([]byte(payload), snapshotAt)
+	if !weekly.Exists {
+		return
+	}
+	if weekly.ResetAt.IsZero() {
+		StoreRoutingWeeklySnapshot(auth, nil, snapshotAt)
+		return
+	}
+	StoreRoutingWeeklySnapshot(auth, &weekly.ResetAt, snapshotAt)
+}
+
 func pruneCodexSmartLocalEvents(events []int64, now time.Time) []int64 {
 	if len(events) == 0 {
 		return nil
@@ -283,7 +298,11 @@ func pickCodexQuotaSmartReady(entries []*scheduledAuth, model string, cursor *in
 		if predicate != nil && !predicate(entry) {
 			continue
 		}
-		candidates = append(candidates, codexQuotaSmartCandidateState(entry, now))
+		candidate := codexQuotaSmartCandidateState(entry, now)
+		if codexQuotaSmartWeeklyExhausted(candidate.state, now) {
+			continue
+		}
+		candidates = append(candidates, candidate)
 	}
 	if len(candidates) == 0 {
 		return nil
@@ -453,6 +472,21 @@ func codexQuotaSmartRemainingValue(value *float64) (float64, bool) {
 		return 0, false
 	}
 	return *value, true
+}
+
+func codexQuotaSmartWeeklyExhausted(state codexQuotaSmartState, now time.Time) bool {
+	if !state.Weekly.Started {
+		return false
+	}
+	remaining, ok := codexQuotaSmartRemainingValue(state.Weekly.RemainingFraction)
+	if !ok || remaining > 0 {
+		return false
+	}
+	resetAt, ok := parseTimeValue(state.Weekly.ResetAt)
+	if !ok || resetAt.IsZero() {
+		return true
+	}
+	return resetAt.After(now)
 }
 
 func codexQuotaSmartWeeklyUrgency(state codexQuotaSmartState, planWeight float64, now time.Time) (float64, bool) {

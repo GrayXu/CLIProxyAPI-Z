@@ -475,6 +475,58 @@ func TestSchedulerPick_CodexQuotaSmartCandidatePoolUsesWeightedWeeklyUrgency(t *
 	}
 }
 
+func TestSchedulerPick_CodexQuotaSmartSkipsWeeklyExhaustedAuth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	exhausted := &Auth{
+		ID:       "codex-exhausted",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-exhausted"},
+	}
+	StoreCodexQuotaSmartState(exhausted, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0),
+				ResetAt:           now.Add(48 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(1),
+			ResetAt:           now.Add(4 * time.Hour).Format(time.RFC3339),
+		},
+	})
+
+	available := &Auth{
+		ID:       "codex-available",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-available"},
+	}
+	StoreCodexQuotaSmartState(available, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.05),
+				ResetAt:           now.Add(24 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.2),
+			ResetAt:           now.Add(2 * time.Hour).Format(time.RFC3339),
+		},
+	})
+
+	scheduler := newSchedulerForTest(&CodexQuotaSmartSelector{}, exhausted, available)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != available.ID {
+		t.Fatalf("pickSingle() auth = %v, want %s", got, available.ID)
+	}
+}
+
 func floatPtr(v float64) *float64 {
 	return &v
 }

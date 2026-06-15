@@ -38,6 +38,8 @@ const (
 	codexUserAgent             = "codex-tui/0.135.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.135.0)"
 	codexOriginator            = "codex-tui"
 	codexDefaultImageToolModel = "gpt-image-2"
+	codexQuotaUsageURL         = "https://chatgpt.com/backend-api/wham/usage"
+	codexQuotaUserAgent        = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
 )
 
 var dataTag = []byte("data:")
@@ -1415,6 +1417,9 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 		}
 	}
 	if refreshToken == "" {
+		if errQuota := e.refreshCodexQuotaRoutingSnapshot(ctx, auth); errQuota != nil {
+			log.Debugf("codex executor: quota refresh skipped/failed for %s: %v", auth.ID, errQuota)
+		}
 		return auth, nil
 	}
 	svc := codexauth.NewCodexAuthWithProxyURL(e.cfg, auth.ProxyURL)
@@ -1439,7 +1444,79 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 	auth.Metadata["type"] = "codex"
 	now := time.Now().Format(time.RFC3339)
 	auth.Metadata["last_refresh"] = now
+	if errQuota := e.refreshCodexQuotaRoutingSnapshot(ctx, auth); errQuota != nil {
+		log.Debugf("codex executor: quota refresh skipped/failed for %s: %v", auth.ID, errQuota)
+	}
 	return auth, nil
+}
+
+func (e *CodexExecutor) refreshCodexQuotaRoutingSnapshot(ctx context.Context, auth *cliproxyauth.Auth) error {
+	if auth == nil {
+		return fmt.Errorf("auth is nil")
+	}
+	apiKey, _ := codexCreds(auth)
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return fmt.Errorf("access token is empty")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, codexQuotaUsageURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", codexQuotaUserAgent)
+	if accountID := codexAccountID(auth); accountID != "" {
+		req.Header.Set("Chatgpt-Account-Id", accountID)
+	}
+	client := helps.NewUtlsHTTPClient(ctx, e.cfg, auth, 0)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("quota request returned status %d", resp.StatusCode)
+	}
+	cliproxyauth.StoreCodexQuotaRoutingSnapshot(auth, string(body), time.Now().UTC())
+	return nil
+}
+
+func codexAccountID(auth *cliproxyauth.Auth) string {
+	if auth == nil || len(auth.Metadata) == 0 {
+		return ""
+	}
+	if accountID := strings.TrimSpace(codexMetadataString(auth.Metadata, "account_id")); accountID != "" {
+		return accountID
+	}
+	idToken := strings.TrimSpace(codexMetadataString(auth.Metadata, "id_token"))
+	if idToken == "" {
+		return ""
+	}
+	claims, err := codexauth.ParseJWTToken(idToken)
+	if err != nil || claims == nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.GetAccountID())
+}
+
+func codexMetadataString(metadata map[string]any, key string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return text
 }
 
 type codexIdentityConfuseState struct {
