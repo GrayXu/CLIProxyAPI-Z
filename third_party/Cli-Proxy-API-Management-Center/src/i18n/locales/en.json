@@ -95,7 +95,21 @@
     "error_not_found": "Management API not found, confirm the server address points to the CLIProxyAPI backend",
     "error_server": "Backend failed while handling the management request, check the server logs",
     "error_cors": "Cross-origin request blocked, please check server configuration",
-    "error_ssl": "SSL/TLS certificate verification failed"
+    "error_ssl": "SSL/TLS certificate verification failed",
+    "show_key": "Show key",
+    "hide_key": "Hide key",
+    "issue_section_divider": "or issue a viewer key",
+    "issue_password_label": "Issue password",
+    "issue_password_placeholder": "Enter issue password",
+    "issue_password_hint": "Use the public issue password to create a viewer key.",
+    "issue_password_required": "Issue password is required",
+    "issue_button": "Issue viewer key",
+    "issue_login_pending": "Please log in first",
+    "issue_success": "Viewer key issued",
+    "issue_result_title": "Viewer key issued",
+    "issue_result_desc": "Store this key now. It will not be shown again.",
+    "issue_result_key_label": "API key",
+    "issue_result_role_label": "Role"
   },
   "header": {
     "check_connection": "Check Connection",
@@ -379,7 +393,9 @@
     "quota_refresh_single": "Refresh quota",
     "quota_refresh_hint": "Refresh quota only for this credential",
     "quota_refresh_success": "Quota refreshed for \"{{name}}\"",
-    "quota_refresh_failed": "Failed to refresh quota for \"{{name}}\": {{message}}"
+    "quota_refresh_failed": "Failed to refresh quota for \"{{name}}\": {{message}}",
+    "delete_title": "Delete File",
+    "delete_all_title": "Delete All Files"
   },
   "antigravity_quota": {
     "title": "Antigravity Quota",
@@ -568,7 +584,8 @@
     "scope_provider": "Scope: {{provider}}",
     "upgrade_required": "Current CPA version does not support OAuth model disablement. Please upgrade.",
     "upgrade_required_title": "Please upgrade CLI Proxy API",
-    "upgrade_required_desc": "The current server version does not support fetching OAuth model disablement. Please upgrade to the latest CPA (CLI Proxy API) version and try again."
+    "upgrade_required_desc": "The current server version does not support fetching OAuth model disablement. Please upgrade to the latest CPA (CLI Proxy API) version and try again.",
+    "delete_title": "Delete Exclusion"
   },
   "oauth_model_alias": {
     "title": "OAuth Model Aliases",
@@ -631,7 +648,8 @@
     "provider_required": "Please enter a provider first",
     "upgrade_required": "This feature requires a newer CLI Proxy API (CPA) version. Please upgrade.",
     "upgrade_required_title": "Please upgrade CLI Proxy API",
-    "upgrade_required_desc": "The current server does not support the OAuth model aliases API. Please upgrade to the latest CLI Proxy API (CPA) version."
+    "upgrade_required_desc": "The current server does not support the OAuth model aliases API. Please upgrade to the latest CLI Proxy API (CPA) version.",
+    "delete_title": "Delete Mappings"
   },
   "auth_login": {
     "codex_oauth_title": "Codex OAuth",
@@ -935,7 +953,9 @@
     "lines": "lines",
     "removed": "Filtered",
     "upgrade_required_title": "Please Upgrade CLI Proxy API",
-    "upgrade_required_desc": "The current server version does not support the logs viewing feature. Please upgrade to the latest version of CLI Proxy API to use this feature."
+    "upgrade_required_desc": "The current server version does not support the logs viewing feature. Please upgrade to the latest version of CLI Proxy API to use this feature.",
+    "clear_confirm_title": "Clear Logs",
+    "trace_usage_load_error": "Failed to load usage details"
   },
   "config_management": {
     "title": "Config Panel",
@@ -1208,7 +1228,8 @@
         "cancel": "Cancel",
         "update": "Update",
         "add": "Add"
-      }
+      },
+      "validation_blocked_short": "Fix errors"
     }
   },
   "quota_management": {
@@ -1462,7 +1483,9 @@
     "claude_api_key": "Claude API key",
     "commercial_mode_restart_required": "Commercial mode setting changed. Please restart the service for it to take effect",
     "copy_failed": "Copy failed",
-    "link_copied": "Link copied to clipboard"
+    "link_copied": "Link copied to clipboard",
+    "load_failed": "Load failed",
+    "save_failed": "Save failed"
   },
   "language": {
     "switch": "Language",
@@ -1482,7 +1505,9 @@
   },
   "sidebar": {
     "toggle_expand": "Expand sidebar",
-    "toggle_collapse": "Collapse sidebar"
+    "toggle_collapse": "Collapse sidebar",
+    "expand": "Expand",
+    "collapse": "Collapse"
   },
   "footer": {
     "api_version": "CLI Proxy API Version",
@@ -1682,5 +1707,9 @@
     "modelCatalog": {
       "notLoaded": "Not loaded"
     }
+  },
+  "ai_providers": {
+    "codex_websockets_label": "WebSockets (websockets)",
+    "codex_websockets_hint": "Enable Responses API websocket transport for this Codex credential."
   }
 }

@@ -95,7 +95,21 @@
     "error_not_found": "Management API не найден, проверьте, что адрес указывает на backend CLIProxyAPI",
     "error_server": "Backend не смог обработать запрос управления, проверьте журналы сервера",
     "error_cors": "Блокировка CORS, проверьте конфигурацию сервера",
-    "error_ssl": "Ошибка проверки SSL/TLS сертификата"
+    "error_ssl": "Ошибка проверки SSL/TLS сертификата",
+    "show_key": "Показать ключ",
+    "hide_key": "Скрыть ключ",
+    "issue_section_divider": "или выпустить viewer key",
+    "issue_password_label": "Пароль выпуска",
+    "issue_password_placeholder": "Введите пароль выпуска",
+    "issue_password_hint": "Используйте публичный пароль выпуска для создания viewer key.",
+    "issue_password_required": "Введите пароль выпуска",
+    "issue_button": "Выпустить viewer key",
+    "issue_login_pending": "Сначала выполните вход",
+    "issue_success": "Viewer key выпущен",
+    "issue_result_title": "Viewer key выпущен",
+    "issue_result_desc": "Сохраните этот ключ сейчас. Он больше не будет показан.",
+    "issue_result_key_label": "API-ключ",
+    "issue_result_role_label": "Роль"
   },
   "header": {
     "check_connection": "Проверить подключение",
@@ -373,7 +387,12 @@
     "quota_refresh_single": "Обновить квоту",
     "quota_refresh_hint": "Обновить квоту только для этих учётных данных",
     "quota_refresh_success": "Квота для \"{{name}}\" обновлена",
-    "quota_refresh_failed": "Не удалось обновить квоту для \"{{name}}\": {{message}}"
+    "quota_refresh_failed": "Не удалось обновить квоту для \"{{name}}\": {{message}}",
+    "delete_title": "Удалить файл",
+    "delete_all_title": "Удалить все файлы",
+    "headers_label": "Пользовательские заголовки (headers)",
+    "headers_placeholder": "{\n  \"X-Custom-Header\": \"value\"\n}",
+    "headers_hint": "Необязательный JSON-объект. Эти заголовки отправляются с данными учётными данными."
   },
   "antigravity_quota": {
     "title": "Квота Antigravity",
@@ -443,7 +462,14 @@
     "plan_team": "Team",
     "plan_free": "Free",
     "plan_pro": "Pro 20x",
-    "plan_prolite": "Pro 5x"
+    "plan_prolite": "Pro 5x",
+    "reset_credits_label": "Активные сбросы",
+    "reset_button": "Сбросить квоту",
+    "reset_confirm_title": "Сброс квоты Codex",
+    "reset_confirm_message": "Использовать один активный сброс для квоты Codex \"{{name}}\"?",
+    "reset_confirm_button": "Сбросить",
+    "reset_success": "Квота Codex для \"{{name}}\" сброшена",
+    "reset_failed": "Не удалось сбросить квоту Codex для \"{{name}}\": {{message}}"
   },
   "gemini_cli_quota": {
     "title": "Квота Gemini CLI",
@@ -555,7 +581,8 @@
     "scope_provider": "Область: {{provider}}",
     "upgrade_required": "Текущая версия CPA не поддерживает отключение OAuth-моделей. Пожалуйста, обновите систему.",
     "upgrade_required_title": "Пожалуйста, обновите CLI Proxy API",
-    "upgrade_required_desc": "Текущая версия сервера не поддерживает получение отключения OAuth-моделей. Обновите CPA (CLI Proxy API) до последней версии и повторите попытку."
+    "upgrade_required_desc": "Текущая версия сервера не поддерживает получение отключения OAuth-моделей. Обновите CPA (CLI Proxy API) до последней версии и повторите попытку.",
+    "delete_title": "Удалить исключение"
   },
   "oauth_model_alias": {
     "title": "Псевдонимы моделей OAuth",
@@ -618,7 +645,8 @@
     "provider_required": "Сначала укажите провайдера",
     "upgrade_required": "Эта функция требует более новой версии CLI Proxy API (CPA). Обновите систему.",
     "upgrade_required_title": "Пожалуйста, обновите CLI Proxy API",
-    "upgrade_required_desc": "Текущая версия сервера не поддерживает API псевдонимов моделей OAuth. Обновите CLI Proxy API (CPA) до последней версии."
+    "upgrade_required_desc": "Текущая версия сервера не поддерживает API псевдонимов моделей OAuth. Обновите CLI Proxy API (CPA) до последней версии.",
+    "delete_title": "Удалить сопоставления"
   },
   "auth_login": {
     "codex_oauth_title": "Codex OAuth",
@@ -922,7 +950,9 @@
     "lines": "строк",
     "removed": "Отфильтровано",
     "upgrade_required_title": "Обновите CLI Proxy API",
-    "upgrade_required_desc": "Текущая версия сервера не поддерживает просмотр журналов. Обновите CLI Proxy API до последней версии, чтобы использовать эту функцию."
+    "upgrade_required_desc": "Текущая версия сервера не поддерживает просмотр журналов. Обновите CLI Proxy API до последней версии, чтобы использовать эту функцию.",
+    "clear_confirm_title": "Очистить журналы",
+    "trace_usage_load_error": "Не удалось загрузить детали использования"
   },
   "config_management": {
     "title": "Панель конфигурации",
@@ -1195,7 +1225,8 @@
         "cancel": "Отменить",
         "update": "Обновить",
         "add": "Добавить"
-      }
+      },
+      "validation_blocked_short": "Есть ошибки"
     }
   },
   "quota_management": {
@@ -1439,7 +1470,9 @@
     "claude_api_key": "API-ключ Claude",
     "commercial_mode_restart_required": "Режим коммерческого использования изменён. Перезапустите сервис, чтобы применить изменения",
     "copy_failed": "Не удалось скопировать",
-    "link_copied": "Ссылка скопирована в буфер обмена"
+    "link_copied": "Ссылка скопирована в буфер обмена",
+    "load_failed": "Ошибка загрузки",
+    "save_failed": "Ошибка сохранения"
   },
   "language": {
     "switch": "Язык",
@@ -1459,7 +1492,9 @@
   },
   "sidebar": {
     "toggle_expand": "Развернуть боковую панель",
-    "toggle_collapse": "Свернуть боковую панель"
+    "toggle_collapse": "Свернуть боковую панель",
+    "expand": "Развернуть",
+    "collapse": "Свернуть"
   },
   "footer": {
     "api_version": "Версия CLI Proxy API",
@@ -1659,5 +1694,19 @@
     "modelCatalog": {
       "notLoaded": "Не загружено"
     }
+  },
+  "ai_providers": {
+    "codex_websockets_label": "WebSockets (websockets)",
+    "codex_websockets_hint": "Включает websocket-транспорт Responses API для этих учётных данных Codex."
+  },
+  "plugin_resource": {
+    "title": "Страница плагина",
+    "page_count": "{{count}} страниц",
+    "load_failed": "Не удалось загрузить страницу плагина",
+    "unavailable": "Страница плагина недоступна",
+    "not_found": "Страница плагина не найдена",
+    "not_found_desc": "Эта страница не объявлена в текущем списке backend-плагинов.",
+    "empty_src": "Адрес страницы плагина пуст",
+    "empty_src_desc": "Для этого пункта меню плагина не указан встраиваемый адрес."
   }
 }
