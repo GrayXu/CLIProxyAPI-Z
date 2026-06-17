@@ -1302,6 +1302,51 @@ func TestSessionAffinitySelector_CrossProviderIsolation(t *testing.T) {
 	}
 }
 
+func TestSessionAffinitySelector_ExpiresWithoutRefresh(t *testing.T) {
+	t.Parallel()
+
+	fallback := &RoundRobinSelector{}
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: fallback,
+		TTL:      80 * time.Millisecond,
+	})
+	defer selector.Stop()
+
+	auths := []*Auth{
+		{ID: "auth-a"},
+		{ID: "auth-b"},
+	}
+	opts := cliproxyexecutor.Options{
+		OriginalRequest: []byte(`{"metadata":{"user_id":"user_xxx_account__session_ac980658-63bd-4fb3-97ba-8da64cb1e344"}}`),
+	}
+
+	first, err := selector.Pick(context.Background(), "claude", "claude-3", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() initial error = %v", err)
+	}
+	if first.ID != "auth-a" {
+		t.Fatalf("Pick() initial auth.ID = %q, want auth-a", first.ID)
+	}
+
+	time.Sleep(40 * time.Millisecond)
+	second, err := selector.Pick(context.Background(), "claude", "claude-3", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() before expiry error = %v", err)
+	}
+	if second.ID != "auth-a" {
+		t.Fatalf("Pick() before expiry auth.ID = %q, want auth-a", second.ID)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	third, err := selector.Pick(context.Background(), "claude", "claude-3", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() after expiry error = %v", err)
+	}
+	if third.ID != "auth-b" {
+		t.Fatalf("Pick() after expiry auth.ID = %q, want auth-b", third.ID)
+	}
+}
+
 func TestSessionCache_GetAndRefresh(t *testing.T) {
 	t.Parallel()
 

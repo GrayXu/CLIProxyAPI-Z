@@ -502,7 +502,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 
 	cacheKey := provider + "::" + primaryID + "::" + model
 
-	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+	if cachedAuthID, ok := s.cache.Get(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
