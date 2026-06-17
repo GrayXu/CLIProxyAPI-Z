@@ -352,6 +352,10 @@ func nextRefreshCheckAt(now time.Time, auth *Auth, interval time.Duration) (time
 		return auth.NextRefreshAfter, true
 	}
 
+	if codexQuotaSnapshotNeedsRefresh(auth, now) {
+		return now, true
+	}
+
 	if evaluator, ok := auth.Runtime.(RefreshEvaluator); ok && evaluator != nil {
 		if interval <= 0 {
 			interval = refreshCheckInterval
