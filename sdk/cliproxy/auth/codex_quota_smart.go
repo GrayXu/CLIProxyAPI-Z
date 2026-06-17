@@ -25,6 +25,7 @@ const (
 	codexSmartCandidatePoolRatio      = 0.90
 	codexSmartDefaultPlanWeight       = 1.0
 	codexSmartPaidPlanWeight          = 5.0
+	codexSmartUnknownWeeklyResetDelay = 10 * time.Minute
 )
 
 // CodexQuotaSmartSelector prioritizes Codex auths using weekly urgency first
@@ -487,6 +488,17 @@ func codexQuotaSmartWeeklyExhausted(state codexQuotaSmartState, now time.Time) b
 		return true
 	}
 	return resetAt.After(now)
+}
+
+func codexQuotaSmartWeeklyExhaustionRetryAt(state codexQuotaSmartState, now time.Time) time.Time {
+	if !codexQuotaSmartWeeklyExhausted(state, now) {
+		return time.Time{}
+	}
+	resetAt, ok := parseTimeValue(state.Weekly.ResetAt)
+	if ok && !resetAt.IsZero() && resetAt.After(now) {
+		return resetAt
+	}
+	return now.Add(codexSmartUnknownWeeklyResetDelay)
 }
 
 func codexQuotaSmartWeeklyUrgency(state codexQuotaSmartState, planWeight float64, now time.Time) (float64, bool) {
