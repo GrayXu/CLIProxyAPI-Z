@@ -14,6 +14,19 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
+type firstInputSelector struct{}
+
+func (firstInputSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	_ = ctx
+	_ = provider
+	_ = model
+	_ = opts
+	if len(auths) == 0 {
+		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+	}
+	return auths[0], nil
+}
+
 func TestFillFirstSelectorPick_Deterministic(t *testing.T) {
 	t.Parallel()
 
@@ -806,6 +819,31 @@ func TestSessionAffinitySelector_FailoverWhenAuthUnavailable(t *testing.T) {
 		if got.ID != second.ID {
 			t.Fatalf("Pick() #%d after failover inconsistent: got %q, want %q", i, got.ID, second.ID)
 		}
+	}
+}
+
+func TestSessionAffinitySelector_NewBindingUsesFilteredAuths(t *testing.T) {
+	t.Parallel()
+
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: firstInputSelector{},
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+
+	exhausted := &Auth{ID: "auth-exhausted", Provider: "codex"}
+	StoreCodexQuotaRoutingSnapshot(exhausted, `{"plan_type":"team","rate_limit":{"secondary_window":{"limit_window_seconds":604800,"used_percent":100,"reset_after_seconds":3600}}}`, time.Now().UTC())
+	available := &Auth{ID: "auth-available", Provider: "codex"}
+
+	opts := cliproxyexecutor.Options{
+		Headers: http.Header{"Session_id": []string{"codex-session-new-binding"}},
+	}
+	got, err := selector.Pick(context.Background(), "mixed", "gpt-5.5", opts, []*Auth{exhausted, available})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got.ID != available.ID {
+		t.Fatalf("Pick() auth.ID = %q, want %q", got.ID, available.ID)
 	}
 }
 

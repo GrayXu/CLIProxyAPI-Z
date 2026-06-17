@@ -517,8 +517,10 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 				return auth, nil
 			}
 		}
-		// Cached auth not available, reselect via fallback selector for even distribution
-		auth, err := s.fallback.Pick(ctx, provider, model, opts, auths)
+		// Cached auth not available, reselect via fallback selector for even distribution.
+		// The fallback must only see the already-filtered candidates; otherwise a stale
+		// scheduler view can immediately bind the session back to a blocked auth.
+		auth, err := s.fallback.Pick(ctx, provider, model, opts, available)
 		if err != nil {
 			return nil, err
 		}
@@ -540,7 +542,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		}
 	}
 
-	auth, err := s.fallback.Pick(ctx, provider, model, opts, auths)
+	auth, err := s.fallback.Pick(ctx, provider, model, opts, available)
 	if err != nil {
 		return nil, err
 	}
