@@ -26,6 +26,7 @@ const (
 	codexSmartDefaultPlanWeight       = 1.0
 	codexSmartPaidPlanWeight          = 5.0
 	codexSmartUnknownQuotaResetDelay  = 10 * time.Minute
+	codexSmartMissingSnapshotDelay    = 15 * time.Second
 )
 
 // CodexQuotaSmartSelector prioritizes Codex auths using weekly urgency first
@@ -518,6 +519,20 @@ func codexQuotaSmartQuotaExhaustionRetryAt(state codexQuotaSmartState, now time.
 		return retryAt
 	}
 	return codexQuotaSmartWindowExhaustionRetryAt(state.FiveHour, now)
+}
+
+func codexQuotaSmartSnapshotMissingRetryAt(auth *Auth, now time.Time) time.Time {
+	if !codexQuotaSmartShouldTrack(auth) {
+		return time.Time{}
+	}
+	if !codexQuotaSnapshotNeedsRefresh(auth, now) {
+		return time.Time{}
+	}
+	state, ok := ReadCodexQuotaSmartState(auth, now)
+	if ok && strings.TrimSpace(state.SnapshotAt) != "" {
+		return time.Time{}
+	}
+	return now.Add(codexSmartMissingSnapshotDelay)
 }
 
 func codexQuotaSmartWeeklyUrgency(state codexQuotaSmartState, planWeight float64, now time.Time) (float64, bool) {
