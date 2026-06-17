@@ -293,6 +293,120 @@ func TestSchedulerPick_CodexQuotaSmartPrefersPrewarmCandidate(t *testing.T) {
 	}
 }
 
+func TestSchedulerPick_CodexQuotaSmartAllowsStalePositiveSnapshot(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	auth := &Auth{
+		ID:       "codex-stale-positive",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-stale-positive"},
+	}
+	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
+		SnapshotAt: now.Add(-2 * codexQuotaSnapshotRefreshInterval).Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.4),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+
+	scheduler := newSchedulerForTest(&CodexQuotaSmartSelector{}, auth)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != auth.ID {
+		t.Fatalf("pickSingle() auth = %v, want %s", got, auth.ID)
+	}
+}
+
+func TestSchedulerPick_CodexQuotaSmartBlocksMissingSnapshotAndUsesLowerPriority(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	missing := &Auth{
+		ID:         "codex-missing",
+		Provider:   "codex",
+		Attributes: map[string]string{"priority": "10"},
+		Metadata:   map[string]any{"account_id": "acct-missing"},
+	}
+	ready := &Auth{
+		ID:         "codex-ready",
+		Provider:   "codex",
+		Attributes: map[string]string{"priority": "1"},
+		Metadata:   map[string]any{"account_id": "acct-ready"},
+	}
+	StoreCodexQuotaSmartState(ready, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.3),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+
+	scheduler := newSchedulerForTest(&CodexQuotaSmartSelector{}, missing, ready)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != ready.ID {
+		t.Fatalf("pickSingle() auth = %v, want %s", got, ready.ID)
+	}
+}
+
+func TestSchedulerPick_CodexQuotaSmartSessionAffinityBlocksExhaustedWeekly(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	exhausted := &Auth{
+		ID:       "codex-exhausted",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-exhausted"},
+	}
+	StoreCodexQuotaSmartState(exhausted, codexQuotaSmartState{
+		SnapshotAt: now.Add(-2 * codexQuotaSnapshotRefreshInterval).Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+	ready := &Auth{
+		ID:       "codex-ready",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-ready"},
+	}
+	StoreCodexQuotaSmartState(ready, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.2),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+
+	selector := NewSessionAffinitySelector(&CodexQuotaSmartSelector{})
+	defer selector.Stop()
+	scheduler := newSchedulerForTest(selector, exhausted, ready)
+	got, errPick := scheduler.pickSingle(context.Background(), "codex", "", cliproxyexecutor.Options{}, nil)
+	if errPick != nil {
+		t.Fatalf("pickSingle() error = %v", errPick)
+	}
+	if got == nil || got.ID != ready.ID {
+		t.Fatalf("pickSingle() auth = %v, want %s", got, ready.ID)
+	}
+}
+
 func TestSchedulerPick_CodexQuotaSmartUsesWeeklyUrgencyThenFiveHourSmoothing(t *testing.T) {
 	t.Parallel()
 
@@ -303,6 +417,7 @@ func TestSchedulerPick_CodexQuotaSmartUsesWeeklyUrgencyThenFiveHourSmoothing(t *
 		Metadata: map[string]any{"account_id": "acct-a"},
 	}
 	StoreCodexQuotaSmartState(authA, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{
@@ -322,6 +437,7 @@ func TestSchedulerPick_CodexQuotaSmartUsesWeeklyUrgencyThenFiveHourSmoothing(t *
 		Metadata: map[string]any{"account_id": "acct-b"},
 	}
 	StoreCodexQuotaSmartState(authB, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{
@@ -341,6 +457,7 @@ func TestSchedulerPick_CodexQuotaSmartUsesWeeklyUrgencyThenFiveHourSmoothing(t *
 		Metadata: map[string]any{"account_id": "acct-c"},
 	}
 	StoreCodexQuotaSmartState(authC, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{
@@ -375,6 +492,7 @@ func TestSchedulerPick_CodexQuotaSmartPrefersPaidPlanOverFreeWhenWeeklyWindowsMa
 		Metadata: map[string]any{"account_id": "acct-free"},
 	}
 	StoreCodexQuotaSmartState(free, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{
@@ -397,6 +515,7 @@ func TestSchedulerPick_CodexQuotaSmartPrefersPaidPlanOverFreeWhenWeeklyWindowsMa
 		Metadata: map[string]any{"account_id": "acct-team"},
 	}
 	StoreCodexQuotaSmartState(team, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{
@@ -419,6 +538,7 @@ func TestSchedulerPick_CodexQuotaSmartPrefersPaidPlanOverFreeWhenWeeklyWindowsMa
 		Metadata: map[string]any{"account_id": "acct-plus"},
 	}
 	StoreCodexQuotaSmartState(plus, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{
@@ -453,6 +573,7 @@ func TestSchedulerPick_CodexQuotaSmartCandidatePoolUsesWeightedWeeklyUrgency(t *
 		Metadata: map[string]any{"account_id": "acct-free-top"},
 	}
 	StoreCodexQuotaSmartState(freeTop, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{
@@ -475,6 +596,7 @@ func TestSchedulerPick_CodexQuotaSmartCandidatePoolUsesWeightedWeeklyUrgency(t *
 		Metadata: map[string]any{"account_id": "acct-team-pool-top"},
 	}
 	StoreCodexQuotaSmartState(teamPoolTop, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{
@@ -497,6 +619,7 @@ func TestSchedulerPick_CodexQuotaSmartCandidatePoolUsesWeightedWeeklyUrgency(t *
 		Metadata: map[string]any{"account_id": "acct-team-pool-winner"},
 	}
 	StoreCodexQuotaSmartState(teamPoolWinner, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
 		Weekly: codexQuotaSmartWeeklyWindow{
 			Started: true,
 			codexQuotaSmartWindow: codexQuotaSmartWindow{

@@ -386,8 +386,7 @@ func (m *Manager) codexQuotaSmartEnabled() bool {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, ok := m.selector.(*CodexQuotaSmartSelector)
-	return ok
+	return selectorUsesCodexQuotaSmart(m.selector)
 }
 
 func (m *Manager) shouldRecordCodexQuotaSmartPrewarm(auth *Auth) bool {
@@ -409,6 +408,7 @@ func (m *Manager) recordCodexQuotaSmartSuccess(ctx context.Context, authID strin
 		m.mu.Unlock()
 		return
 	}
+	needsRefresh := prewarm || codexQuotaSmartSnapshotNeedsRefresh(current, now)
 	updated := current.Clone()
 	if !codexQuotaSmartRecordSuccess(updated, now, prewarm) {
 		m.mu.Unlock()
@@ -421,7 +421,7 @@ func (m *Manager) recordCodexQuotaSmartSuccess(ctx context.Context, authID strin
 		m.scheduler.upsertAuth(updated.Clone())
 	}
 	_ = m.persist(ctx, updated)
-	if prewarm && m.markRefreshPending(authID, now) {
+	if needsRefresh && m.markRefreshPending(authID, now) {
 		go m.refreshAuth(context.Background(), authID)
 	}
 }
@@ -712,9 +712,10 @@ func (m *Manager) availableAuthsForRouteModel(auths []*Auth, provider, routeMode
 	availableByPriority := make(map[int][]*Auth)
 	cooldownCount := 0
 	var earliest time.Time
+	enforceQuotaSmart := m.codexQuotaSmartEnabled()
 	for _, candidate := range auths {
 		checkModel := m.selectionModelForAuth(candidate, routeModel)
-		blocked, reason, next := isAuthBlockedForModel(candidate, checkModel, now)
+		blocked, reason, next := isAuthBlockedForModelWithQuotaSmart(candidate, checkModel, now, enforceQuotaSmart)
 		if !blocked {
 			priority := authPriority(candidate)
 			availableByPriority[priority] = append(availableByPriority[priority], candidate)

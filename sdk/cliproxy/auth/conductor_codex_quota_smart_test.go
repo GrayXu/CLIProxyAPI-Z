@@ -121,6 +121,52 @@ func TestManagerExecute_CodexQuotaSmartRecordsLocalUsageAndTriggersPrewarmRefres
 	waitForRefreshCount(t, executor, 1)
 }
 
+func TestManagerExecute_CodexQuotaSmartTriggersRefreshForStalePositiveSnapshot(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager(nil, &CodexQuotaSmartSelector{}, nil)
+	t.Cleanup(manager.Close)
+	executor := &codexQuotaSmartTestExecutor{}
+	manager.RegisterExecutor(executor)
+
+	now := time.Now().UTC()
+	auth := &Auth{
+		ID:       "codex-smart-stale-positive-auth",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"account_id":   "acct-smart-stale-positive",
+			"access_token": "token-smart-stale-positive",
+		},
+	}
+	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
+		SnapshotAt: now.Add(-2 * codexQuotaSnapshotRefreshInterval).Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.4),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.8),
+			ResetAt:           now.Add(30 * time.Minute).Format(time.RFC3339),
+		},
+	})
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() { reg.UnregisterClient(auth.ID) })
+
+	if _, err := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: "test-model"}, cliproxyexecutor.Options{}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	waitForRefreshCount(t, executor, 1)
+}
+
 func TestManagerRecordCodexQuotaSmartSuccess_DeduplicatesPrewarmRefresh(t *testing.T) {
 	t.Parallel()
 

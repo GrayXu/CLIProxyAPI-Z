@@ -202,10 +202,14 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 }
 
 func collectAvailableByPriority(auths []*Auth, model string, now time.Time) (available map[int][]*Auth, cooldownCount int, earliest time.Time) {
+	return collectAvailableByPriorityWithQuotaSmart(auths, model, now, false)
+}
+
+func collectAvailableByPriorityWithQuotaSmart(auths []*Auth, model string, now time.Time, enforceQuotaSmart bool) (available map[int][]*Auth, cooldownCount int, earliest time.Time) {
 	available = make(map[int][]*Auth)
 	for i := 0; i < len(auths); i++ {
 		candidate := auths[i]
-		blocked, reason, next := isAuthBlockedForModel(candidate, model, now)
+		blocked, reason, next := isAuthBlockedForModelWithQuotaSmart(candidate, model, now, enforceQuotaSmart)
 		if !blocked {
 			priority := authPriority(candidate)
 			available[priority] = append(available[priority], candidate)
@@ -222,11 +226,15 @@ func collectAvailableByPriority(auths []*Auth, model string, now time.Time) (ava
 }
 
 func getAvailableAuths(auths []*Auth, provider, model string, now time.Time) ([]*Auth, error) {
+	return getAvailableAuthsWithQuotaSmart(auths, provider, model, now, false)
+}
+
+func getAvailableAuthsWithQuotaSmart(auths []*Auth, provider, model string, now time.Time, enforceQuotaSmart bool) ([]*Auth, error) {
 	if len(auths) == 0 {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth candidates"}
 	}
 
-	availableByPriority, cooldownCount, earliest := collectAvailableByPriority(auths, model, now)
+	availableByPriority, cooldownCount, earliest := collectAvailableByPriorityWithQuotaSmart(auths, model, now, enforceQuotaSmart)
 	if len(availableByPriority) == 0 {
 		if cooldownCount == len(auths) && !earliest.IsZero() {
 			providerForError := provider
@@ -400,13 +408,21 @@ func (s *QuotaStickySelector) Pick(ctx context.Context, provider, model string, 
 }
 
 func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {
+	return isAuthBlockedForModelWithQuotaSmart(auth, model, now, false)
+}
+
+func isAuthBlockedForModelWithQuotaSmart(auth *Auth, model string, now time.Time, enforceQuotaSmart bool) (bool, blockReason, time.Time) {
 	if auth == nil {
 		return true, blockReasonOther, time.Time{}
 	}
 	if auth.Disabled || auth.Status == StatusDisabled {
 		return true, blockReasonDisabled, time.Time{}
 	}
-	if exhausted, resetAt := codexQuotaSmartWeeklyExhausted(auth, now); exhausted {
+	if enforceQuotaSmart {
+		if blocked, reason, resetAt := codexQuotaSmartBlockedForQuotaSmart(auth, now); blocked {
+			return true, reason, resetAt
+		}
+	} else if exhausted, resetAt := codexQuotaSmartWeeklyExhausted(auth, now); exhausted {
 		if !resetAt.IsZero() {
 			return true, blockReasonCooldown, resetAt
 		}
@@ -462,6 +478,20 @@ func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, block
 		return true, blockReasonOther, next
 	}
 	return false, blockReasonNone, time.Time{}
+}
+
+func selectorUsesCodexQuotaSmart(selector Selector) bool {
+	switch value := selector.(type) {
+	case *CodexQuotaSmartSelector:
+		return true
+	case *SessionAffinitySelector:
+		if value == nil {
+			return false
+		}
+		return selectorUsesCodexQuotaSmart(value.fallback)
+	default:
+		return false
+	}
 }
 
 // sessionPattern matches Claude Code user_id format:
@@ -527,7 +557,8 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	}
 
 	now := time.Now()
-	available, err := getAvailableAuths(auths, provider, model, now)
+	enforceQuotaSmart := selectorUsesCodexQuotaSmart(s.fallback)
+	available, err := getAvailableAuthsWithQuotaSmart(auths, provider, model, now, enforceQuotaSmart)
 	if err != nil {
 		return nil, err
 	}
@@ -537,6 +568,12 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if cachedAuthID, ok := s.cache.Get(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
+				if enforceQuotaSmart {
+					if blocked, _, _ := codexQuotaSmartBlockedForQuotaSmart(auth, now); blocked {
+						s.cache.InvalidateAuth(cachedAuthID)
+						break
+					}
+				}
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
 				return auth, nil
 			}
@@ -556,6 +593,12 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		if cachedAuthID, ok := s.cache.Get(fallbackKey); ok {
 			for _, auth := range available {
 				if auth.ID == cachedAuthID {
+					if enforceQuotaSmart {
+						if blocked, _, _ := codexQuotaSmartBlockedForQuotaSmart(auth, now); blocked {
+							s.cache.InvalidateAuth(cachedAuthID)
+							break
+						}
+					}
 					s.cache.Set(cacheKey, auth.ID)
 					entry.Infof("session-affinity: fallback cache hit | session=%s fallback=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
 					return auth, nil

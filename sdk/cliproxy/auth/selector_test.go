@@ -404,6 +404,31 @@ func TestIsAuthBlockedForModel_CodexMissingWeeklyQuotaDoesNotBlock(t *testing.T)
 	}
 }
 
+func TestIsAuthBlockedForModel_CodexFiveHourQuotaExhausted(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	remaining := 0.0
+	auth := &Auth{ID: "codex-a", Provider: "codex"}
+	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: &remaining,
+			ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+		},
+	})
+
+	blocked, reason, next := isAuthBlockedForModel(auth, "gpt-5.5", now)
+	if !blocked {
+		t.Fatal("blocked = false, want true")
+	}
+	if reason != blockReasonCooldown {
+		t.Fatalf("reason = %v, want %v", reason, blockReasonCooldown)
+	}
+	if next.IsZero() || !next.After(now) {
+		t.Fatalf("next = %v, want future reset time", next)
+	}
+}
+
 func TestFillFirstSelectorPick_SkipsCodexWeeklyQuotaExhausted(t *testing.T) {
 	t.Parallel()
 
@@ -818,6 +843,79 @@ func TestSessionAffinitySelector_FailoverWhenAuthUnavailable(t *testing.T) {
 		if got.ID != second.ID {
 			t.Fatalf("Pick() #%d after failover inconsistent: got %q, want %q", i, got.ID, second.ID)
 		}
+	}
+}
+
+func TestSessionAffinitySelector_QuotaSmartInvalidatesExhaustedCacheHit(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: &CodexQuotaSmartSelector{},
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+
+	authA := &Auth{
+		ID:       "codex-a",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-a"},
+	}
+	StoreCodexQuotaSmartState(authA, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.5),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+	authB := &Auth{
+		ID:       "codex-b",
+		Provider: "codex",
+		Metadata: map[string]any{"account_id": "acct-b"},
+	}
+	StoreCodexQuotaSmartState(authB, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.2),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+
+	opts := cliproxyexecutor.Options{
+		OriginalRequest: []byte(`{"metadata":{"user_id":"user_xxx_account__session_33333333-3333-4333-8333-333333333333"}}`),
+	}
+	first, err := selector.Pick(context.Background(), "codex", "gpt-5.5", opts, []*Auth{authA, authB})
+	if err != nil {
+		t.Fatalf("Pick() first error = %v", err)
+	}
+	if first == nil || first.ID != authA.ID {
+		t.Fatalf("Pick() first auth = %v, want %s", first, authA.ID)
+	}
+
+	exhausted := authA.Clone()
+	StoreCodexQuotaSmartState(exhausted, codexQuotaSmartState{
+		SnapshotAt: now.Format(time.RFC3339),
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+
+	second, err := selector.Pick(context.Background(), "codex", "gpt-5.5", opts, []*Auth{exhausted, authB})
+	if err != nil {
+		t.Fatalf("Pick() second error = %v", err)
+	}
+	if second == nil || second.ID != authB.ID {
+		t.Fatalf("Pick() second auth = %v, want %s", second, authB.ID)
 	}
 }
 

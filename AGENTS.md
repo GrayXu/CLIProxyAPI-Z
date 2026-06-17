@@ -191,7 +191,27 @@ ExecStart=/usr/local/bin/cliproxyapi -config /etc/cliproxyapi/config.yaml
 MANAGEMENT_STATIC_PATH=/var/lib/cliproxyapi/static
 ```
 
-- For full backend deployment, build with release-style ldflags so `/usr/local/bin/cliproxyapi --version` prints useful metadata:
+- Backend deployments must be non-interactive and must verify a real OpenAI-compatible request, not only `/healthz` or systemd status.
+- Prefer the scripted deployment path:
+
+```bash
+CLIPROXYAPI_VERIFY_API_KEY=... scripts/deploy-cliproxyapi-verified.sh
+```
+
+- `scripts/deploy-cliproxyapi-verified.sh` is expected to:
+  - build a temporary binary with release-style ldflags
+  - create a timestamped backup under `/var/lib/cliproxyapi/backups/`
+  - install `/usr/local/bin/cliproxyapi`
+  - restart `cliproxyapi.service`
+  - wait for `/healthz`
+  - call `/v1/responses` with the configured verification API key
+  - rollback the binary and restart the service automatically on any failed step
+- The `/v1/responses` verification must parse JSON. A successful response may contain `"error": null`; only a non-null `error` should fail the deployment.
+- Do not print API keys while preparing deployment. If using a local key from `/etc/cliproxyapi/config.yaml`, extract it into an environment variable without echoing it.
+- The server does not expose a standalone `--version` flag. Use the first line of `cliproxyapi -h` or the service startup log to verify build metadata.
+- When the main worktree has unrelated dirty files, commit first and deploy from a clean temporary worktree at the final commit so the runtime build metadata does not contain `-dirty`.
+
+- Manual full backend deployment, if the script cannot be used, should still follow the same backup, restart, health, real `/v1/responses`, and rollback requirements. Build with release-style ldflags:
 
 ```bash
 VERSION=$(git describe --tags --dirty --always)
@@ -212,7 +232,7 @@ cp -a /usr/local/bin/cliproxyapi "$BACKUP_DIR/cliproxyapi"
 cp -a /var/lib/cliproxyapi/static/management.html "$BACKUP_DIR/management.html"
 ```
 
-- Replace the binary with `install -o root -g root -m 0755`, replace runtime Management HTML with `install -o root -g root -m 0644`, then restart and verify:
+- Replace the binary with `install -o root -g root -m 0755`, replace runtime Management HTML with `install -o root -g root -m 0644`, then restart and verify health, logs, and a real `/v1/responses` call:
 
 ```bash
 install -o root -g root -m 0755 /tmp/cliproxyapi-${COMMIT} /usr/local/bin/cliproxyapi

@@ -425,7 +425,7 @@ func (m *Manager) stickyAuthUsable(authID string, providers []string, model stri
 			return false
 		}
 	}
-	blocked, _, _ := isAuthBlockedForModel(auth, modelKey, now)
+	blocked, _, _ := isAuthBlockedForModelWithQuotaSmart(auth, modelKey, now, m.codexQuotaSmartEnabled())
 	return !blocked
 }
 

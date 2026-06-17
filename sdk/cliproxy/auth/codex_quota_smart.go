@@ -26,6 +26,7 @@ const (
 	codexSmartDefaultPlanWeight       = 1.0
 	codexSmartPaidPlanWeight          = 5.0
 	codexSmartUnknownWeeklyResetDelay = 10 * time.Minute
+	codexSmartUnknownResetDelay       = 10 * time.Minute
 )
 
 // CodexQuotaSmartSelector prioritizes Codex auths using weekly urgency first
@@ -72,13 +73,14 @@ type codexQuotaSmartCandidate struct {
 	weeklyUrgency     float64
 	hasWeeklyUrgency  bool
 	prewarmEligible   bool
+	snapshotStale     bool
 }
 
 func (s *CodexQuotaSmartSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	_ = ctx
 	_ = opts
 	now := time.Now()
-	available, err := getAvailableAuths(auths, provider, model, now)
+	available, err := getAvailableAuthsWithQuotaSmart(auths, provider, model, now, true)
 	if err != nil {
 		return nil, err
 	}
@@ -175,6 +177,11 @@ func UpdateCodexQuotaSmartStateFromSnapshot(auth *Auth, payload string, snapshot
 	}
 
 	StoreCodexQuotaSmartState(auth, state)
+	if weekly.Exists {
+		StoreRoutingWeeklySnapshot(auth, &weekly.ResetAt, snapshotAt)
+	} else {
+		StoreRoutingWeeklySnapshotObservedAt(auth, snapshotAt)
+	}
 }
 
 func pruneCodexSmartLocalEvents(events []int64, now time.Time) []int64 {
@@ -262,6 +269,7 @@ func codexQuotaSmartCandidateState(entry *scheduledAuth, now time.Time) codexQuo
 	candidate.localEventCount = len(state.Local5HEvents)
 	candidate.prewarmEligible = codexQuotaSmartShouldPrewarm(entry.auth, now)
 	candidate.snapshotAt, _ = parseTimeValue(state.SnapshotAt)
+	candidate.snapshotStale = codexQuotaSmartSnapshotStaleAt(candidate.snapshotAt, now)
 	candidate.lastPrewarmAt, _ = parseTimeValue(state.LastPrewarmAt)
 	candidate.weeklyResetAt, _ = parseTimeValue(state.Weekly.ResetAt)
 	candidate.fiveHourResetAt, _ = parseTimeValue(state.FiveHour.ResetAt)
@@ -282,6 +290,9 @@ func pickCodexQuotaSmartReady(entries []*scheduledAuth, model string, cursor *in
 			continue
 		}
 		if predicate != nil && !predicate(entry) {
+			continue
+		}
+		if blocked, _, _ := codexQuotaSmartBlockedForQuotaSmart(entry.auth, now); blocked {
 			continue
 		}
 		candidates = append(candidates, codexQuotaSmartCandidateState(entry, now))
@@ -376,6 +387,12 @@ func pickCodexQuotaSmartRoundRobin(candidates []codexQuotaSmartCandidate, cursor
 }
 
 func compareCodexSmartPrewarmCandidate(left, right codexQuotaSmartCandidate) int {
+	if left.snapshotStale != right.snapshotStale {
+		if !left.snapshotStale {
+			return -1
+		}
+		return 1
+	}
 	if cmp := compareTimeAscending(left.lastPrewarmAt, right.lastPrewarmAt); cmp != 0 {
 		return cmp
 	}
@@ -386,6 +403,12 @@ func compareCodexSmartPrewarmCandidate(left, right codexQuotaSmartCandidate) int
 }
 
 func compareCodexSmartWeeklyCandidate(left, right codexQuotaSmartCandidate) int {
+	if left.snapshotStale != right.snapshotStale {
+		if !left.snapshotStale {
+			return -1
+		}
+		return 1
+	}
 	if cmp := compareFloatDesc(left.weeklyUrgency, right.weeklyUrgency); cmp != 0 {
 		return cmp
 	}
@@ -457,25 +480,82 @@ func codexQuotaSmartRemainingValue(value *float64) (float64, bool) {
 }
 
 func codexQuotaSmartWeeklyExhausted(auth *Auth, now time.Time) (bool, time.Time) {
+	blocked, next := codexQuotaSmartExplicitQuotaExhausted(auth, now)
+	return blocked, next
+}
+
+func codexQuotaSmartBlockedForQuotaSmart(auth *Auth, now time.Time) (bool, blockReason, time.Time) {
+	if exhausted, next := codexQuotaSmartExplicitQuotaExhausted(auth, now); exhausted {
+		return true, blockReasonCooldown, next
+	}
+	if !codexQuotaSmartShouldTrack(auth) {
+		return false, blockReasonNone, time.Time{}
+	}
+	state, ok := ReadCodexQuotaSmartState(auth, now)
+	if !ok {
+		return true, blockReasonCooldown, now.UTC().Add(codexSmartUnknownResetDelay)
+	}
+	snapshotAt, _ := parseTimeValue(state.SnapshotAt)
+	if snapshotAt.IsZero() {
+		return true, blockReasonCooldown, now.UTC().Add(codexSmartUnknownResetDelay)
+	}
+	return false, blockReasonNone, time.Time{}
+}
+
+func codexQuotaSmartExplicitQuotaExhausted(auth *Auth, now time.Time) (bool, time.Time) {
 	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return false, time.Time{}
 	}
 	state, ok := ReadCodexQuotaSmartState(auth, now)
-	if !ok || !state.Weekly.Started {
+	if !ok {
 		return false, time.Time{}
 	}
-	remaining, ok := codexQuotaSmartRemainingValue(state.Weekly.RemainingFraction)
+	if state.Weekly.Started {
+		if exhausted, resetAt := codexQuotaSmartWindowExhausted(state.Weekly.RemainingFraction, state.Weekly.ResetAt, now); exhausted {
+			return true, resetAt
+		}
+	}
+	if exhausted, resetAt := codexQuotaSmartWindowExhausted(state.FiveHour.RemainingFraction, state.FiveHour.ResetAt, now); exhausted {
+		return true, resetAt
+	}
+	return false, time.Time{}
+}
+
+func codexQuotaSmartWindowExhausted(remainingFraction *float64, resetAtValue string, now time.Time) (bool, time.Time) {
+	remaining, ok := codexQuotaSmartRemainingValue(remainingFraction)
 	if !ok || remaining > 0 {
 		return false, time.Time{}
 	}
-	resetAt, _ := parseTimeValue(state.Weekly.ResetAt)
+	resetAt, _ := parseTimeValue(resetAtValue)
 	if !resetAt.IsZero() && !resetAt.After(now.UTC()) {
 		return false, time.Time{}
 	}
 	if resetAt.IsZero() {
-		resetAt = now.UTC().Add(codexSmartUnknownWeeklyResetDelay)
+		resetAt = now.UTC().Add(codexSmartUnknownResetDelay)
 	}
 	return true, resetAt
+}
+
+func codexQuotaSmartSnapshotNeedsRefresh(auth *Auth, now time.Time) bool {
+	if !codexQuotaSmartShouldTrack(auth) {
+		return false
+	}
+	state, ok := ReadCodexQuotaSmartState(auth, now)
+	if !ok {
+		return true
+	}
+	snapshotAt, _ := parseTimeValue(state.SnapshotAt)
+	if snapshotAt.IsZero() {
+		return true
+	}
+	return codexQuotaSmartSnapshotStaleAt(snapshotAt, now)
+}
+
+func codexQuotaSmartSnapshotStaleAt(snapshotAt time.Time, now time.Time) bool {
+	if snapshotAt.IsZero() {
+		return true
+	}
+	return now.UTC().Sub(snapshotAt.UTC()) >= codexQuotaSnapshotRefreshInterval
 }
 
 func codexQuotaSmartWeeklyUrgency(state codexQuotaSmartState, planWeight float64, now time.Time) (float64, bool) {
