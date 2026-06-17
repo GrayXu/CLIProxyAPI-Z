@@ -590,8 +590,8 @@ func TestManager_ShouldRefresh_CodexQuotaSnapshotInterval(t *testing.T) {
 			routingWeeklySnapshotAtMetadataKey: now.Add(-11 * time.Minute).Format(time.RFC3339),
 		},
 	}
-	if manager.shouldRefresh(invalidIDTokenAuth, now) {
-		t.Fatalf("shouldRefresh(invalidIDTokenAuth) = true, want false")
+	if !manager.shouldRefresh(invalidIDTokenAuth, now) {
+		t.Fatalf("shouldRefresh(invalidIDTokenAuth) = false, want true")
 	}
 }
 

@@ -60,13 +60,7 @@ func codexQuotaSnapshotNeedsRefresh(auth *Auth, now time.Time) bool {
 	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return false
 	}
-	if len(auth.Metadata) == 0 {
-		return false
-	}
-	if !hasMetadataString(auth.Metadata, "access_token") {
-		return false
-	}
-	if !hasCodexQuotaAccountID(auth) {
+	if !isCodexOAuthAuth(auth) {
 		return false
 	}
 
@@ -150,6 +144,27 @@ func StoreCodexQuotaSnapshot(auth *Auth, payload string, snapshotAt time.Time) {
 		return
 	}
 	auth.Metadata[codexQuotaSnapshotAtMetadataKey] = snapshotAt.UTC().Format(time.RFC3339)
+}
+
+func isCodexOAuthAuth(auth *Auth) bool {
+	if auth == nil || auth.Disabled {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return false
+	}
+	if len(auth.Metadata) == 0 {
+		return false
+	}
+	if !hasMetadataString(auth.Metadata, "access_token") {
+		return false
+	}
+	if auth.Attributes != nil {
+		if apiKey := strings.TrimSpace(auth.Attributes["api_key"]); apiKey != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func hasMetadataString(meta map[string]any, keys ...string) bool {

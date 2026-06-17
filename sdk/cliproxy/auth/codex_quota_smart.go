@@ -27,6 +27,7 @@ const (
 	codexSmartPaidPlanWeight          = 5.0
 	codexSmartUnknownQuotaResetDelay  = 10 * time.Minute
 	codexSmartMissingSnapshotDelay    = 15 * time.Second
+	codexSmartStaleSnapshotMaxAge     = 30 * time.Minute
 )
 
 // CodexQuotaSmartSelector prioritizes Codex auths using weekly urgency first
@@ -525,18 +526,22 @@ func codexQuotaSmartQuotaExhaustionRetryAt(state codexQuotaSmartState, now time.
 	return codexQuotaSmartWindowExhaustionRetryAt(state.FiveHour, now)
 }
 
-func codexQuotaSmartSnapshotMissingRetryAt(auth *Auth, now time.Time) time.Time {
-	if !codexQuotaSmartShouldTrack(auth) {
-		return time.Time{}
-	}
-	if !codexQuotaSnapshotNeedsRefresh(auth, now) {
+func codexQuotaSmartSnapshotUnavailableRetryAt(auth *Auth, now time.Time) time.Time {
+	if !isCodexOAuthAuth(auth) {
 		return time.Time{}
 	}
 	state, ok := ReadCodexQuotaSmartState(auth, now)
-	if ok && strings.TrimSpace(state.SnapshotAt) != "" {
-		return time.Time{}
+	if !ok || strings.TrimSpace(state.SnapshotAt) == "" {
+		return now.Add(codexSmartMissingSnapshotDelay)
 	}
-	return now.Add(codexSmartMissingSnapshotDelay)
+	snapshotAt, ok := parseTimeValue(state.SnapshotAt)
+	if !ok || snapshotAt.IsZero() {
+		return now.Add(codexSmartMissingSnapshotDelay)
+	}
+	if now.Sub(snapshotAt) > codexSmartStaleSnapshotMaxAge {
+		return now.Add(codexSmartMissingSnapshotDelay)
+	}
+	return time.Time{}
 }
 
 func codexQuotaSmartWeeklyUrgency(state codexQuotaSmartState, planWeight float64, now time.Time) (float64, bool) {

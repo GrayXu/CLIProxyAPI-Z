@@ -872,6 +872,57 @@ func TestIsAuthBlockedForModel_CodexQuotaSnapshotMissingIsBlocked(t *testing.T) 
 	}
 }
 
+func TestIsAuthBlockedForModel_CodexQuotaSnapshotStaleIsBlocked(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	auth := &Auth{
+		ID:       "codex-stale-snapshot",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"access_token": "token",
+			"account_id":   "acct",
+		},
+	}
+	StoreCodexQuotaRoutingSnapshot(auth, `{"plan_type":"plus","rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":10,"reset_after_seconds":3600},"secondary_window":{"limit_window_seconds":604800,"used_percent":10,"reset_after_seconds":3600}}}`, now.Add(-31*time.Minute))
+
+	blocked, reason, next := isAuthBlockedForModel(auth, "gpt-5.5", now)
+	if !blocked {
+		t.Fatal("blocked = false, want true")
+	}
+	if reason != blockReasonCooldown {
+		t.Fatalf("reason = %v, want %v", reason, blockReasonCooldown)
+	}
+	if !next.After(now) {
+		t.Fatalf("next = %s, want after %s", next, now)
+	}
+}
+
+func TestIsAuthBlockedForModel_CodexOAuthWithoutAccountIDIsBlocked(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	auth := &Auth{
+		ID:       "codex-no-account",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"access_token": "token",
+			"id_token":     "not-a-jwt",
+		},
+	}
+
+	blocked, reason, next := isAuthBlockedForModel(auth, "gpt-5.5", now)
+	if !blocked {
+		t.Fatal("blocked = false, want true")
+	}
+	if reason != blockReasonCooldown {
+		t.Fatalf("reason = %v, want %v", reason, blockReasonCooldown)
+	}
+	if !next.After(now) {
+		t.Fatalf("next = %s, want after %s", next, now)
+	}
+}
+
 func TestRoundRobinSelectorPick_MixedVirtualAndNonVirtualFallsBackToFlat(t *testing.T) {
 	t.Parallel()
 

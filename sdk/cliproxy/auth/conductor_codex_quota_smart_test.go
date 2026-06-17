@@ -85,7 +85,7 @@ func TestManagerExecute_CodexQuotaSmartRecordsLocalUsageAndTriggersPrewarmRefres
 		},
 	}
 	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
-		SnapshotAt: time.Now().Add(-30 * time.Minute).UTC().Format(time.RFC3339),
+		SnapshotAt: time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339),
 		FiveHour: codexQuotaSmartWindow{
 			RemainingFraction: floatPtr(0.8),
 			ResetAt:           time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
@@ -142,7 +142,7 @@ func TestManagerExecute_CodexQuotaSmartWrappedBySessionAffinityRecordsLocalUsage
 		},
 	}
 	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
-		SnapshotAt: time.Now().Add(-30 * time.Minute).UTC().Format(time.RFC3339),
+		SnapshotAt: time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339),
 		FiveHour: codexQuotaSmartWindow{
 			RemainingFraction: floatPtr(0.8),
 			ResetAt:           time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
@@ -196,7 +196,7 @@ func TestManagerRecordCodexQuotaSmartSuccess_DeduplicatesPrewarmRefresh(t *testi
 		},
 	}
 	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
-		SnapshotAt: time.Now().Add(-30 * time.Minute).UTC().Format(time.RFC3339),
+		SnapshotAt: time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339),
 		FiveHour: codexQuotaSmartWindow{
 			RemainingFraction: floatPtr(0.8),
 			ResetAt:           time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
