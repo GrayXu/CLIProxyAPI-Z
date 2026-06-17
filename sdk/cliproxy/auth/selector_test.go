@@ -356,6 +356,84 @@ func TestIsAuthBlockedForModel_UnavailableWithoutNextRetryIsNotBlocked(t *testin
 	}
 }
 
+func TestIsAuthBlockedForModel_CodexWeeklyQuotaExhausted(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	remaining := 0.0
+	auth := &Auth{ID: "codex-a", Provider: "codex"}
+	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: &remaining,
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+
+	blocked, reason, next := isAuthBlockedForModel(auth, "gpt-5.5", now)
+	if !blocked {
+		t.Fatal("blocked = false, want true")
+	}
+	if reason != blockReasonCooldown {
+		t.Fatalf("reason = %v, want %v", reason, blockReasonCooldown)
+	}
+	if next.IsZero() || !next.After(now) {
+		t.Fatalf("next = %v, want future reset time", next)
+	}
+}
+
+func TestIsAuthBlockedForModel_CodexMissingWeeklyQuotaDoesNotBlock(t *testing.T) {
+	t.Parallel()
+
+	auth := &Auth{ID: "codex-a", Provider: "codex"}
+	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{Started: false},
+	})
+
+	blocked, reason, next := isAuthBlockedForModel(auth, "gpt-5.5", time.Now().UTC())
+	if blocked {
+		t.Fatal("blocked = true, want false")
+	}
+	if reason != blockReasonNone {
+		t.Fatalf("reason = %v, want %v", reason, blockReasonNone)
+	}
+	if !next.IsZero() {
+		t.Fatalf("next = %v, want zero", next)
+	}
+}
+
+func TestFillFirstSelectorPick_SkipsCodexWeeklyQuotaExhausted(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	remaining := 0.0
+	exhausted := &Auth{
+		ID:         "exhausted",
+		Provider:   "codex",
+		Attributes: map[string]string{"priority": "10"},
+	}
+	StoreCodexQuotaSmartState(exhausted, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: &remaining,
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+	ready := &Auth{ID: "ready", Provider: "codex"}
+
+	got, err := (&FillFirstSelector{}).Pick(context.Background(), "codex", "gpt-5.5", cliproxyexecutor.Options{}, []*Auth{exhausted, ready})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got.ID != "ready" {
+		t.Fatalf("Pick() auth.ID = %q, want ready", got.ID)
+	}
+}
+
 func TestFillFirstSelectorPick_ThinkingSuffixFallsBackToBaseModelState(t *testing.T) {
 	t.Parallel()
 
@@ -1390,6 +1468,51 @@ func TestSessionCache_GetAndRefresh(t *testing.T) {
 	got, ok = cache.GetAndRefresh("session1")
 	if ok {
 		t.Fatalf("GetAndRefresh() after expiry = %q, %v, want '', false", got, ok)
+	}
+}
+
+func TestSessionAffinitySelector_ExpiresWithoutRefresh(t *testing.T) {
+	t.Parallel()
+
+	fallback := &RoundRobinSelector{}
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: fallback,
+		TTL:      80 * time.Millisecond,
+	})
+	defer selector.Stop()
+
+	auths := []*Auth{
+		{ID: "auth-a"},
+		{ID: "auth-b"},
+	}
+	opts := cliproxyexecutor.Options{
+		OriginalRequest: []byte(`{"metadata":{"user_id":"user_xxx_account__session_ac980658-63bd-4fb3-97ba-8da64cb1e344"}}`),
+	}
+
+	first, err := selector.Pick(context.Background(), "claude", "claude-3", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() initial error = %v", err)
+	}
+	if first.ID != "auth-a" {
+		t.Fatalf("Pick() initial auth.ID = %q, want auth-a", first.ID)
+	}
+
+	time.Sleep(40 * time.Millisecond)
+	second, err := selector.Pick(context.Background(), "claude", "claude-3", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() before expiry error = %v", err)
+	}
+	if second.ID != "auth-a" {
+		t.Fatalf("Pick() before expiry auth.ID = %q, want auth-a", second.ID)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	third, err := selector.Pick(context.Background(), "claude", "claude-3", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() after expiry error = %v", err)
+	}
+	if third.ID != "auth-b" {
+		t.Fatalf("Pick() after expiry auth.ID = %q, want auth-b", third.ID)
 	}
 }
 

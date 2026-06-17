@@ -406,6 +406,12 @@ func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, block
 	if auth.Disabled || auth.Status == StatusDisabled {
 		return true, blockReasonDisabled, time.Time{}
 	}
+	if exhausted, resetAt := codexQuotaSmartWeeklyExhausted(auth, now); exhausted {
+		if !resetAt.IsZero() {
+			return true, blockReasonCooldown, resetAt
+		}
+		return true, blockReasonOther, time.Time{}
+	}
 	if model != "" {
 		if len(auth.ModelStates) > 0 {
 			state, ok := auth.ModelStates[model]
@@ -528,7 +534,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 
 	cacheKey := provider + "::" + primaryID + "::" + model
 
-	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
+	if cachedAuthID, ok := s.cache.Get(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
 				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
