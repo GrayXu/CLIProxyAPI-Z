@@ -110,6 +110,41 @@ func TestFillFirstSelectorPick_CodexSkipsWeeklyExhausted(t *testing.T) {
 	}
 }
 
+func TestFillFirstSelectorPick_CodexSkipsFiveHourExhausted(t *testing.T) {
+	t.Parallel()
+
+	selector := &FillFirstSelector{}
+	now := time.Now().UTC()
+	exhausted := &Auth{
+		ID:       "codex-exhausted",
+		Provider: "codex",
+	}
+	StoreCodexQuotaSmartState(exhausted, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.5),
+				ResetAt:           now.Add(24 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0),
+			ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+		},
+	})
+
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, []*Auth{
+		exhausted,
+		{ID: "codex-available", Provider: "codex"},
+	})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got == nil || got.ID != "codex-available" {
+		t.Fatalf("Pick() auth = %v, want codex-available", got)
+	}
+}
+
 func TestRoundRobinSelectorPick_CyclesDeterministic(t *testing.T) {
 	t.Parallel()
 
@@ -1426,6 +1461,61 @@ func TestSessionAffinitySelector_RebindsWhenCachedCodexWeeklyExhausted(t *testin
 	}
 	if second.ID != available.ID {
 		t.Fatalf("Pick() after weekly exhaustion auth.ID = %q, want %q", second.ID, available.ID)
+	}
+}
+
+func TestSessionAffinitySelector_RebindsWhenCachedCodexFiveHourExhausted(t *testing.T) {
+	t.Parallel()
+
+	fallback := &RoundRobinSelector{}
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: fallback,
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+
+	now := time.Now().UTC()
+	cached := &Auth{
+		ID:       "codex-a-cached",
+		Provider: "codex",
+	}
+	available := &Auth{
+		ID:       "codex-b-available",
+		Provider: "codex",
+	}
+	auths := []*Auth{cached, available}
+	opts := cliproxyexecutor.Options{
+		OriginalRequest: []byte(`{"metadata":{"user_id":"user_xxx_account__session_b520c78d-942d-4245-a13f-c9137f30b845"}}`),
+	}
+
+	first, err := selector.Pick(context.Background(), "codex", "gpt-5.4", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() initial error = %v", err)
+	}
+	if first.ID != cached.ID {
+		t.Fatalf("Pick() initial auth.ID = %q, want %q", first.ID, cached.ID)
+	}
+
+	StoreCodexQuotaSmartState(cached, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.5),
+				ResetAt:           now.Add(24 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0),
+			ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+		},
+	})
+
+	second, err := selector.Pick(context.Background(), "codex", "gpt-5.4", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() after five-hour exhaustion error = %v", err)
+	}
+	if second.ID != available.ID {
+		t.Fatalf("Pick() after five-hour exhaustion auth.ID = %q, want %q", second.ID, available.ID)
 	}
 }
 

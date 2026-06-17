@@ -384,7 +384,7 @@ func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, block
 	if strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		state, ok := ReadCodexQuotaSmartState(auth, now)
 		if ok {
-			if retryAt := codexQuotaSmartWeeklyExhaustionRetryAt(state, now); !retryAt.IsZero() {
+			if retryAt := codexQuotaSmartQuotaExhaustionRetryAt(state, now); !retryAt.IsZero() {
 				return true, blockReasonCooldown, retryAt
 			}
 		}
