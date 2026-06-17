@@ -33,6 +33,10 @@ const (
 // and only uses 5-hour quota data for local smoothing among top weekly candidates.
 type CodexQuotaSmartSelector struct{}
 
+func (s *CodexQuotaSmartSelector) UsesCodexQuotaSmart() bool {
+	return s != nil
+}
+
 type codexQuotaSmartWindow struct {
 	RemainingFraction *float64 `json:"remaining_fraction,omitempty"`
 	ResetAt           string   `json:"reset_at,omitempty"`

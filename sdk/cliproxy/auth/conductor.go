@@ -433,8 +433,8 @@ func (m *Manager) codexQuotaSmartEnabled() bool {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, ok := m.selector.(*CodexQuotaSmartSelector)
-	return ok
+	aware, ok := m.selector.(codexQuotaSmartAwareSelector)
+	return ok && aware.UsesCodexQuotaSmart()
 }
 
 func (m *Manager) shouldRecordCodexQuotaSmartPrewarm(auth *Auth) bool {

@@ -30,6 +30,10 @@ type RoundRobinSelector struct {
 	maxKeys int
 }
 
+type codexQuotaSmartAwareSelector interface {
+	UsesCodexQuotaSmart() bool
+}
+
 // FillFirstSelector selects the first available credential (deterministic ordering).
 // This "burns" one account before moving to the next, which can help stagger
 // rolling-window subscription caps (e.g. chat message limits).
@@ -585,6 +589,14 @@ func (s *SessionAffinitySelector) InvalidateAuth(authID string) {
 	if s.cache != nil {
 		s.cache.InvalidateAuth(authID)
 	}
+}
+
+func (s *SessionAffinitySelector) UsesCodexQuotaSmart() bool {
+	if s == nil || s.fallback == nil {
+		return false
+	}
+	aware, ok := s.fallback.(codexQuotaSmartAwareSelector)
+	return ok && aware.UsesCodexQuotaSmart()
 }
 
 // ExtractSessionID extracts session identifier from multiple sources.
