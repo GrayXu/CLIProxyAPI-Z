@@ -241,10 +241,7 @@ func (h *Handler) storeCodexQuotaSnapshot(ctx context.Context, auth *coreauth.Au
 	}
 	updated := auth.Clone()
 	now := time.Now().UTC()
-	coreauth.StoreCodexQuotaSnapshot(updated, body, now)
-	if resetAt, ok := extractCodexWeeklyResetAtForManagement([]byte(body), now); ok {
-		coreauth.StoreRoutingWeeklySnapshot(updated, &resetAt, now)
-	}
+	coreauth.StoreCodexQuotaRoutingSnapshot(updated, body, now)
 	_, _ = h.authManager.Update(ctx, updated)
 }
 

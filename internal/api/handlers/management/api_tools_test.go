@@ -41,6 +41,67 @@ func TestCachedCodexQuotaSnapshotUsesStoredMetadata(t *testing.T) {
 	}
 }
 
+func TestStoreCodexQuotaSnapshotUpdatesQuotaSmartState(t *testing.T) {
+	t.Parallel()
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{
+		ID:       "codex-auth",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"account_id": "acct",
+			"plan_type":  "team",
+		},
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	h := &Handler{authManager: manager}
+	h.storeCodexQuotaSnapshot(context.Background(), auth, codexQuotaSnapshot{
+		Usage: apiCallResponse{
+			StatusCode: http.StatusOK,
+			Body:       `{"plan_type":"team","rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":10,"reset_after_seconds":3600},"secondary_window":{"limit_window_seconds":604800,"used_percent":100,"reset_after_seconds":259200}}}`,
+		},
+		PlanType: "team",
+	})
+
+	updated, ok := manager.GetByID("codex-auth")
+	if !ok {
+		t.Fatal("updated auth not found")
+	}
+	raw, ok := updated.Metadata["routing_codex_smart_state"].(string)
+	if !ok || raw == "" {
+		t.Fatalf("routing_codex_smart_state = %#v, want stored state", updated.Metadata["routing_codex_smart_state"])
+	}
+	var state struct {
+		Weekly struct {
+			Started           bool     `json:"started"`
+			RemainingFraction *float64 `json:"remaining_fraction"`
+			ResetAt           string   `json:"reset_at"`
+		} `json:"weekly"`
+		FiveHour struct {
+			RemainingFraction *float64 `json:"remaining_fraction"`
+			ResetAt           string   `json:"reset_at"`
+		} `json:"five_hour"`
+	}
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		t.Fatalf("unmarshal quota-smart state: %v", err)
+	}
+	if !state.Weekly.Started {
+		t.Fatal("weekly started = false, want true")
+	}
+	if state.Weekly.RemainingFraction == nil || *state.Weekly.RemainingFraction != 0 {
+		t.Fatalf("weekly remaining = %v, want 0", state.Weekly.RemainingFraction)
+	}
+	if state.Weekly.ResetAt == "" {
+		t.Fatal("weekly reset_at is empty")
+	}
+	if state.FiveHour.RemainingFraction == nil || *state.FiveHour.RemainingFraction != 0.9 {
+		t.Fatalf("five-hour remaining = %v, want 0.9", state.FiveHour.RemainingFraction)
+	}
+}
+
 func TestGetCodexQuotaWithoutSnapshotReturnsNotFound(t *testing.T) {
 	t.Parallel()
 

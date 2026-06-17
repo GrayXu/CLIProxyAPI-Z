@@ -99,37 +99,8 @@ func TestServiceApplyCoreAuthAddOrUpdate_DeleteReAddDoesNotInheritStaleRuntimeSt
 
 	service.applyCoreAuthRemoval(context.Background(), authID)
 
-	disabled, ok := service.coreManager.GetByID(authID)
-	if !ok || disabled == nil {
-		t.Fatalf("expected disabled auth after removal")
-	}
-	if !disabled.Disabled || disabled.Status != coreauth.StatusDisabled {
-		t.Fatalf("expected disabled auth after removal, got disabled=%v status=%v", disabled.Disabled, disabled.Status)
-	}
-	if disabled.LastRefreshedAt.IsZero() {
-		t.Fatalf("expected disabled auth to still carry prior LastRefreshedAt for regression setup")
-	}
-	if disabled.NextRefreshAfter.IsZero() {
-		t.Fatalf("expected disabled auth to still carry prior NextRefreshAfter for regression setup")
-	}
-
-	// Reconcile prunes unsupported model state during registration, so seed the
-	// disabled snapshot explicitly before exercising delete -> re-add behavior.
-	disabled.ModelStates = map[string]*coreauth.ModelState{
-		modelID: {
-			Quota: coreauth.QuotaState{BackoffLevel: 7},
-		},
-	}
-	if _, err := service.coreManager.Update(context.Background(), disabled); err != nil {
-		t.Fatalf("seed disabled auth stale ModelStates: %v", err)
-	}
-
-	disabled, ok = service.coreManager.GetByID(authID)
-	if !ok || disabled == nil {
-		t.Fatalf("expected disabled auth after stale state seeding")
-	}
-	if len(disabled.ModelStates) == 0 {
-		t.Fatalf("expected disabled auth to carry seeded ModelStates for regression setup")
+	if _, ok := service.coreManager.GetByID(authID); ok {
+		t.Fatalf("expected auth %q to be removed from runtime state", authID)
 	}
 
 	service.applyCoreAuthAddOrUpdate(context.Background(), &coreauth.Auth{
@@ -166,7 +137,7 @@ func TestServiceRunAndReloadKeepSessionAffinitySelector(t *testing.T) {
 		Port:    0,
 		AuthDir: filepath.Join(tmpDir, "auth"),
 		Routing: internalconfig.RoutingConfig{
-			Strategy:           "quota-sticky",
+			Strategy:           "fill-first",
 			SessionAffinity:    true,
 			SessionAffinityTTL: "90m",
 		},
@@ -205,8 +176,8 @@ func TestServiceRunAndReloadKeepSessionAffinitySelector(t *testing.T) {
 	if selectorType != "*auth.SessionAffinitySelector" {
 		t.Fatalf("selector before run = %q, want %q", selectorType, "*auth.SessionAffinitySelector")
 	}
-	if fallbackType != "*auth.QuotaStickySelector" {
-		t.Fatalf("fallback before run = %q, want %q", fallbackType, "*auth.QuotaStickySelector")
+	if fallbackType != "*auth.FillFirstSelector" {
+		t.Fatalf("fallback before run = %q, want %q", fallbackType, "*auth.FillFirstSelector")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -227,8 +198,8 @@ func TestServiceRunAndReloadKeepSessionAffinitySelector(t *testing.T) {
 	if selectorType != "*auth.SessionAffinitySelector" {
 		t.Fatalf("selector after run = %q, want %q", selectorType, "*auth.SessionAffinitySelector")
 	}
-	if fallbackType != "*auth.QuotaStickySelector" {
-		t.Fatalf("fallback after run = %q, want %q", fallbackType, "*auth.QuotaStickySelector")
+	if fallbackType != "*auth.FillFirstSelector" {
+		t.Fatalf("fallback after run = %q, want %q", fallbackType, "*auth.FillFirstSelector")
 	}
 
 	if reload == nil {

@@ -25,13 +25,17 @@ const (
 	codexSmartCandidatePoolRatio      = 0.90
 	codexSmartDefaultPlanWeight       = 1.0
 	codexSmartPaidPlanWeight          = 5.0
-	codexSmartUnknownWeeklyResetDelay = 10 * time.Minute
-	codexSmartUnknownResetDelay       = 10 * time.Minute
+	codexSmartUnknownQuotaResetDelay  = 10 * time.Minute
+	codexSmartMissingSnapshotDelay    = 15 * time.Second
 )
 
 // CodexQuotaSmartSelector prioritizes Codex auths using weekly urgency first
 // and only uses 5-hour quota data for local smoothing among top weekly candidates.
 type CodexQuotaSmartSelector struct{}
+
+func (s *CodexQuotaSmartSelector) UsesCodexQuotaSmart() bool {
+	return s != nil
+}
 
 type codexQuotaSmartWindow struct {
 	RemainingFraction *float64 `json:"remaining_fraction,omitempty"`
@@ -182,6 +186,21 @@ func UpdateCodexQuotaSmartStateFromSnapshot(auth *Auth, payload string, snapshot
 	} else {
 		StoreRoutingWeeklySnapshotObservedAt(auth, snapshotAt)
 	}
+}
+
+func StoreCodexQuotaRoutingSnapshot(auth *Auth, payload string, snapshotAt time.Time) {
+	StoreCodexQuotaSnapshot(auth, payload, snapshotAt)
+	UpdateCodexQuotaSmartStateFromSnapshot(auth, payload, snapshotAt)
+
+	_, weekly, _ := extractCodexQuotaSmartSnapshot([]byte(payload), snapshotAt)
+	if !weekly.Exists {
+		return
+	}
+	if weekly.ResetAt.IsZero() {
+		StoreRoutingWeeklySnapshot(auth, nil, snapshotAt)
+		return
+	}
+	StoreRoutingWeeklySnapshot(auth, &weekly.ResetAt, snapshotAt)
 }
 
 func pruneCodexSmartLocalEvents(events []int64, now time.Time) []int64 {
@@ -479,61 +498,93 @@ func codexQuotaSmartRemainingValue(value *float64) (float64, bool) {
 	return *value, true
 }
 
-func codexQuotaSmartWeeklyExhausted(auth *Auth, now time.Time) (bool, time.Time) {
-	blocked, next := codexQuotaSmartExplicitQuotaExhausted(auth, now)
-	return blocked, next
-}
-
 func codexQuotaSmartBlockedForQuotaSmart(auth *Auth, now time.Time) (bool, blockReason, time.Time) {
-	if exhausted, next := codexQuotaSmartExplicitQuotaExhausted(auth, now); exhausted {
-		return true, blockReasonCooldown, next
+	if retryAt := codexQuotaSmartExplicitQuotaExhaustionRetryAt(auth, now); !retryAt.IsZero() {
+		return true, blockReasonCooldown, retryAt
 	}
 	if !codexQuotaSmartShouldTrack(auth) {
 		return false, blockReasonNone, time.Time{}
 	}
 	state, ok := ReadCodexQuotaSmartState(auth, now)
 	if !ok {
-		return true, blockReasonCooldown, now.UTC().Add(codexSmartUnknownResetDelay)
+		return true, blockReasonCooldown, now.UTC().Add(codexSmartMissingSnapshotDelay)
 	}
 	snapshotAt, _ := parseTimeValue(state.SnapshotAt)
 	if snapshotAt.IsZero() {
-		return true, blockReasonCooldown, now.UTC().Add(codexSmartUnknownResetDelay)
+		return true, blockReasonCooldown, now.UTC().Add(codexSmartMissingSnapshotDelay)
 	}
 	return false, blockReasonNone, time.Time{}
 }
 
-func codexQuotaSmartExplicitQuotaExhausted(auth *Auth, now time.Time) (bool, time.Time) {
+func codexQuotaSmartExplicitQuotaExhaustionRetryAt(auth *Auth, now time.Time) time.Time {
 	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
-		return false, time.Time{}
+		return time.Time{}
 	}
 	state, ok := ReadCodexQuotaSmartState(auth, now)
 	if !ok {
-		return false, time.Time{}
+		return time.Time{}
 	}
-	if state.Weekly.Started {
-		if exhausted, resetAt := codexQuotaSmartWindowExhausted(state.Weekly.RemainingFraction, state.Weekly.ResetAt, now); exhausted {
-			return true, resetAt
-		}
-	}
-	if exhausted, resetAt := codexQuotaSmartWindowExhausted(state.FiveHour.RemainingFraction, state.FiveHour.ResetAt, now); exhausted {
-		return true, resetAt
-	}
-	return false, time.Time{}
+	return codexQuotaSmartQuotaExhaustionRetryAt(state, now)
 }
 
-func codexQuotaSmartWindowExhausted(remainingFraction *float64, resetAtValue string, now time.Time) (bool, time.Time) {
-	remaining, ok := codexQuotaSmartRemainingValue(remainingFraction)
+func codexQuotaSmartWeeklyExhausted(state codexQuotaSmartState, now time.Time) bool {
+	if !state.Weekly.Started {
+		return false
+	}
+	remaining, ok := codexQuotaSmartRemainingValue(state.Weekly.RemainingFraction)
 	if !ok || remaining > 0 {
-		return false, time.Time{}
+		return false
 	}
-	resetAt, _ := parseTimeValue(resetAtValue)
-	if !resetAt.IsZero() && !resetAt.After(now.UTC()) {
-		return false, time.Time{}
+	resetAt, ok := parseTimeValue(state.Weekly.ResetAt)
+	if !ok || resetAt.IsZero() {
+		return true
 	}
-	if resetAt.IsZero() {
-		resetAt = now.UTC().Add(codexSmartUnknownResetDelay)
+	return resetAt.After(now)
+}
+
+func codexQuotaSmartWeeklyExhaustionRetryAt(state codexQuotaSmartState, now time.Time) time.Time {
+	if !codexQuotaSmartWeeklyExhausted(state, now) {
+		return time.Time{}
 	}
-	return true, resetAt
+	resetAt, ok := parseTimeValue(state.Weekly.ResetAt)
+	if ok && !resetAt.IsZero() && resetAt.After(now) {
+		return resetAt
+	}
+	return now.Add(codexSmartUnknownQuotaResetDelay)
+}
+
+func codexQuotaSmartWindowExhaustionRetryAt(window codexQuotaSmartWindow, now time.Time) time.Time {
+	remaining, ok := codexQuotaSmartRemainingValue(window.RemainingFraction)
+	if !ok || remaining > 0 {
+		return time.Time{}
+	}
+	resetAt, ok := parseTimeValue(window.ResetAt)
+	if ok && !resetAt.IsZero() && resetAt.After(now) {
+		return resetAt
+	}
+	return now.Add(codexSmartUnknownQuotaResetDelay)
+}
+
+func codexQuotaSmartQuotaExhaustionRetryAt(state codexQuotaSmartState, now time.Time) time.Time {
+	if retryAt := codexQuotaSmartWeeklyExhaustionRetryAt(state, now); !retryAt.IsZero() {
+		return retryAt
+	}
+	return codexQuotaSmartWindowExhaustionRetryAt(state.FiveHour, now)
+}
+
+func codexQuotaSmartSnapshotUnavailableRetryAt(auth *Auth, now time.Time) time.Time {
+	if !codexQuotaSmartShouldTrack(auth) {
+		return time.Time{}
+	}
+	state, ok := ReadCodexQuotaSmartState(auth, now)
+	if !ok || strings.TrimSpace(state.SnapshotAt) == "" {
+		return now.Add(codexSmartMissingSnapshotDelay)
+	}
+	snapshotAt, ok := parseTimeValue(state.SnapshotAt)
+	if !ok || snapshotAt.IsZero() {
+		return now.Add(codexSmartMissingSnapshotDelay)
+	}
+	return time.Time{}
 }
 
 func codexQuotaSmartSnapshotNeedsRefresh(auth *Auth, now time.Time) bool {

@@ -30,14 +30,14 @@ type RoundRobinSelector struct {
 	maxKeys int
 }
 
+type codexQuotaSmartAwareSelector interface {
+	UsesCodexQuotaSmart() bool
+}
+
 // FillFirstSelector selects the first available credential (deterministic ordering).
 // This "burns" one account before moving to the next, which can help stagger
 // rolling-window subscription caps (e.g. chat message limits).
 type FillFirstSelector struct{}
-
-// QuotaStickySelector selects the ready credential with the highest cached quota score.
-// Sticky mapping is owned by Manager; this selector only handles first-pick ordering.
-type QuotaStickySelector struct{}
 
 type blockReason int
 
@@ -386,27 +386,6 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 	return best, nil
 }
 
-// Pick selects the ready auth with the highest cached quota score.
-func (s *QuotaStickySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
-	_ = opts
-	now := time.Now()
-	available, err := getAvailableAuths(auths, provider, model, now)
-	if err != nil {
-		return nil, err
-	}
-	available = preferCodexWebsocketAuths(ctx, provider, available)
-	var best *Auth
-	for _, candidate := range available {
-		if betterAuthByQuotaScore(candidate, best, model) {
-			best = candidate
-		}
-	}
-	if best == nil {
-		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
-	}
-	return best, nil
-}
-
 func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {
 	return isAuthBlockedForModelWithQuotaSmart(auth, model, now, false)
 }
@@ -422,11 +401,8 @@ func isAuthBlockedForModelWithQuotaSmart(auth *Auth, model string, now time.Time
 		if blocked, reason, resetAt := codexQuotaSmartBlockedForQuotaSmart(auth, now); blocked {
 			return true, reason, resetAt
 		}
-	} else if exhausted, resetAt := codexQuotaSmartWeeklyExhausted(auth, now); exhausted {
-		if !resetAt.IsZero() {
-			return true, blockReasonCooldown, resetAt
-		}
-		return true, blockReasonOther, time.Time{}
+	} else if retryAt := codexQuotaSmartExplicitQuotaExhaustionRetryAt(auth, now); !retryAt.IsZero() {
+		return true, blockReasonCooldown, retryAt
 	}
 	if model != "" {
 		if len(auth.ModelStates) > 0 {
@@ -539,11 +515,10 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 //  1. metadata.user_id (Claude Code format with _session_{uuid}) - highest priority
 //  2. X-Session-ID header
 //  3. Session_id header (Codex)
-//  4. X-Amp-Thread-Id header (Amp CLI thread ID)
-//  5. X-Client-Request-Id header (PI)
-//  6. metadata.user_id (non-Claude Code format)
-//  7. conversation_id field in request body
-//  8. Stable hash from first few messages content (fallback)
+//  4. X-Client-Request-Id header (PI)
+//  5. metadata.user_id (non-Claude Code format)
+//  6. conversation_id field in request body
+//  7. Stable hash from first few messages content (fallback)
 //
 // Note: The cache key includes provider, session ID, and model to handle cases where
 // a session uses multiple models (e.g., gemini-2.5-pro and gemini-3-flash-preview)
@@ -578,8 +553,10 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 				return auth, nil
 			}
 		}
-		// Cached auth not available, reselect via fallback selector for even distribution
-		auth, err := s.fallback.Pick(ctx, provider, model, opts, auths)
+		// Cached auth not available, reselect via fallback selector for even distribution.
+		// The fallback must only see the already-filtered candidates; otherwise a stale
+		// scheduler view can immediately bind the session back to a blocked auth.
+		auth, err := s.fallback.Pick(ctx, provider, model, opts, available)
 		if err != nil {
 			return nil, err
 		}
@@ -607,7 +584,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		}
 	}
 
-	auth, err := s.fallback.Pick(ctx, provider, model, opts, auths)
+	auth, err := s.fallback.Pick(ctx, provider, model, opts, available)
 	if err != nil {
 		return nil, err
 	}
@@ -649,16 +626,23 @@ func (s *SessionAffinitySelector) InvalidateAuth(authID string) {
 	}
 }
 
+func (s *SessionAffinitySelector) UsesCodexQuotaSmart() bool {
+	if s == nil || s.fallback == nil {
+		return false
+	}
+	aware, ok := s.fallback.(codexQuotaSmartAwareSelector)
+	return ok && aware.UsesCodexQuotaSmart()
+}
+
 // ExtractSessionID extracts session identifier from multiple sources.
 // Priority order:
 //  1. metadata.user_id (Claude Code format with _session_{uuid}) - highest priority for Claude Code clients
 //  2. X-Session-ID header
 //  3. Session_id header (Codex)
-//  4. X-Amp-Thread-Id header (Amp CLI thread ID)
-//  5. X-Client-Request-Id header (PI)
-//  6. metadata.user_id (non-Claude Code format)
-//  7. conversation_id field in request body
-//  8. Stable hash from first few messages content (fallback)
+//  4. X-Client-Request-Id header (PI)
+//  5. metadata.user_id (non-Claude Code format)
+//  6. conversation_id field in request body
+//  7. Stable hash from first few messages content (fallback)
 func ExtractSessionID(headers http.Header, payload []byte, metadata map[string]any) string {
 	primary, _ := extractSessionIDs(headers, payload, metadata)
 	return primary
@@ -704,14 +688,7 @@ func extractSessionIDs(headers http.Header, payload []byte, metadata map[string]
 		}
 	}
 
-	// 4. X-Amp-Thread-Id header (Amp CLI thread ID)
-	if headers != nil {
-		if tid := headers.Get("X-Amp-Thread-Id"); tid != "" {
-			return "amp:" + tid, ""
-		}
-	}
-
-	// 5. X-Client-Request-Id header (PI)
+	// 4. X-Client-Request-Id header (PI)
 	if headers != nil {
 		if rid := headers.Get("X-Client-Request-Id"); rid != "" {
 			return "clientreq:" + rid, ""

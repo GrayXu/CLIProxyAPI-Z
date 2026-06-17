@@ -14,6 +14,19 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
+type firstInputSelector struct{}
+
+func (firstInputSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	_ = ctx
+	_ = provider
+	_ = model
+	_ = opts
+	if len(auths) == 0 {
+		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+	}
+	return auths[0], nil
+}
+
 func TestFillFirstSelectorPick_Deterministic(t *testing.T) {
 	t.Parallel()
 
@@ -76,6 +89,72 @@ func TestFillFirstSelectorPick_CodexPrefersNearestWeeklyResetThenAuthID(t *testi
 	}
 	if got == nil || got.ID != "a" {
 		t.Fatalf("Pick() second auth = %v, want a", got)
+	}
+}
+
+func TestFillFirstSelectorPick_CodexSkipsWeeklyExhausted(t *testing.T) {
+	t.Parallel()
+
+	selector := &FillFirstSelector{}
+	now := time.Now().UTC()
+	exhausted := &Auth{
+		ID:       "codex-exhausted",
+		Provider: "codex",
+	}
+	StoreCodexQuotaSmartState(exhausted, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, []*Auth{
+		exhausted,
+		{ID: "codex-available", Provider: "codex"},
+	})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got == nil || got.ID != "codex-available" {
+		t.Fatalf("Pick() auth = %v, want codex-available", got)
+	}
+}
+
+func TestFillFirstSelectorPick_CodexSkipsFiveHourExhausted(t *testing.T) {
+	t.Parallel()
+
+	selector := &FillFirstSelector{}
+	now := time.Now().UTC()
+	exhausted := &Auth{
+		ID:       "codex-exhausted",
+		Provider: "codex",
+	}
+	StoreCodexQuotaSmartState(exhausted, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.5),
+				ResetAt:           now.Add(24 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0),
+			ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+		},
+	})
+
+	got, err := selector.Pick(context.Background(), "codex", "", cliproxyexecutor.Options{}, []*Auth{
+		exhausted,
+		{ID: "codex-available", Provider: "codex"},
+	})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got == nil || got.ID != "codex-available" {
+		t.Fatalf("Pick() auth = %v, want codex-available", got)
 	}
 }
 
@@ -846,6 +925,31 @@ func TestSessionAffinitySelector_FailoverWhenAuthUnavailable(t *testing.T) {
 	}
 }
 
+func TestSessionAffinitySelector_NewBindingUsesFilteredAuths(t *testing.T) {
+	t.Parallel()
+
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: firstInputSelector{},
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+
+	exhausted := &Auth{ID: "auth-exhausted", Provider: "codex"}
+	StoreCodexQuotaRoutingSnapshot(exhausted, `{"plan_type":"team","rate_limit":{"secondary_window":{"limit_window_seconds":604800,"used_percent":100,"reset_after_seconds":3600}}}`, time.Now().UTC())
+	available := &Auth{ID: "auth-available", Provider: "codex"}
+
+	opts := cliproxyexecutor.Options{
+		Headers: http.Header{"Session_id": []string{"codex-session-new-binding"}},
+	}
+	got, err := selector.Pick(context.Background(), "mixed", "gpt-5.5", opts, []*Auth{exhausted, available})
+	if err != nil {
+		t.Fatalf("Pick() error = %v", err)
+	}
+	if got.ID != available.ID {
+		t.Fatalf("Pick() auth.ID = %q, want %q", got.ID, available.ID)
+	}
+}
+
 func TestSessionAffinitySelector_QuotaSmartInvalidatesExhaustedCacheHit(t *testing.T) {
 	t.Parallel()
 
@@ -916,6 +1020,73 @@ func TestSessionAffinitySelector_QuotaSmartInvalidatesExhaustedCacheHit(t *testi
 	}
 	if second == nil || second.ID != authB.ID {
 		t.Fatalf("Pick() second auth = %v, want %s", second, authB.ID)
+	}
+}
+
+func TestIsAuthBlockedForModelWithQuotaSmart_CodexQuotaSnapshotMissingIsBlocked(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	auth := &Auth{
+		ID:       "codex-missing-snapshot",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"access_token": "token",
+			"account_id":   "acct",
+		},
+	}
+
+	blocked, reason, next := isAuthBlockedForModelWithQuotaSmart(auth, "gpt-5.5", now, true)
+	if !blocked {
+		t.Fatal("blocked = false, want true")
+	}
+	if reason != blockReasonCooldown {
+		t.Fatalf("reason = %v, want %v", reason, blockReasonCooldown)
+	}
+	if !next.After(now) {
+		t.Fatalf("next = %s, want after %s", next, now)
+	}
+}
+
+func TestIsAuthBlockedForModelWithQuotaSmart_CodexQuotaSnapshotStalePositiveDoesNotBlock(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	auth := &Auth{
+		ID:       "codex-stale-snapshot",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"access_token": "token",
+			"account_id":   "acct",
+		},
+	}
+	StoreCodexQuotaRoutingSnapshot(auth, `{"plan_type":"plus","rate_limit":{"primary_window":{"limit_window_seconds":18000,"used_percent":10,"reset_after_seconds":3600},"secondary_window":{"limit_window_seconds":604800,"used_percent":10,"reset_after_seconds":3600}}}`, now.Add(-31*time.Minute))
+
+	blocked, reason, next := isAuthBlockedForModelWithQuotaSmart(auth, "gpt-5.5", now, true)
+	if blocked {
+		t.Fatalf("blocked = true, want false (reason=%v next=%s)", reason, next)
+	}
+	if reason != blockReasonNone {
+		t.Fatalf("reason = %v, want %v", reason, blockReasonNone)
+	}
+}
+
+func TestIsAuthBlockedForModelWithQuotaSmart_CodexOAuthWithoutAccountIDDoesNotBlock(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	auth := &Auth{
+		ID:       "codex-no-account",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"access_token": "token",
+			"id_token":     "not-a-jwt",
+		},
+	}
+
+	blocked, reason, next := isAuthBlockedForModelWithQuotaSmart(auth, "gpt-5.5", now, true)
+	if blocked {
+		t.Fatalf("blocked = true, want false (reason=%v next=%s)", reason, next)
 	}
 }
 
@@ -1032,60 +1203,6 @@ func TestExtractSessionID_CodexSessionIDPriorityOverClientRequestID(t *testing.T
 	want := "codex:codex-session-456"
 	if got != want {
 		t.Errorf("ExtractSessionID() = %q, want %q (Session_id should take priority over X-Client-Request-Id)", got, want)
-	}
-}
-
-func TestExtractSessionID_AmpThreadId(t *testing.T) {
-	t.Parallel()
-
-	headers := make(http.Header)
-	headers.Set("X-Amp-Thread-Id", "T-7873e6bd-6354-4a9a-be2c-c7702c6e1b64")
-
-	got := ExtractSessionID(headers, nil, nil)
-	want := "amp:T-7873e6bd-6354-4a9a-be2c-c7702c6e1b64"
-	if got != want {
-		t.Errorf("ExtractSessionID() with X-Amp-Thread-Id = %q, want %q", got, want)
-	}
-}
-
-func TestExtractSessionID_AmpThreadIdPriorityOverClientRequestID(t *testing.T) {
-	t.Parallel()
-
-	headers := make(http.Header)
-	headers.Set("X-Amp-Thread-Id", "T-priority-test")
-	headers.Set("X-Client-Request-Id", "pi-session-123")
-
-	got := ExtractSessionID(headers, nil, nil)
-	want := "amp:T-priority-test"
-	if got != want {
-		t.Errorf("ExtractSessionID() = %q, want %q (X-Amp-Thread-Id should take priority over X-Client-Request-Id)", got, want)
-	}
-}
-
-// TestExtractSessionID_AmpThreadIdLowerPriority verifies X-Amp-Thread-Id is lower
-// priority than Claude Code metadata.user_id but higher than conversation_id.
-func TestExtractSessionID_AmpThreadIdPriority(t *testing.T) {
-	t.Parallel()
-
-	// X-Amp-Thread-Id should be used when no Claude Code user_id is present
-	headers := make(http.Header)
-	headers.Set("X-Amp-Thread-Id", "T-priority-test")
-
-	payload := []byte(`{"conversation_id":"conv-12345"}`)
-	got := ExtractSessionID(headers, payload, nil)
-	want := "amp:T-priority-test"
-	if got != want {
-		t.Errorf("ExtractSessionID() = %q, want %q (Amp thread ID should take priority over conversation_id)", got, want)
-	}
-
-	// Claude Code user_id should take priority over X-Amp-Thread-Id
-	headers2 := make(http.Header)
-	headers2.Set("X-Amp-Thread-Id", "T-priority-test")
-	payload2 := []byte(`{"metadata":{"user_id":"user_xxx_account__session_ac980658-63bd-4fb3-97ba-8da64cb1e344"}}`)
-	got2 := ExtractSessionID(headers2, payload2, nil)
-	want2 := "claude:ac980658-63bd-4fb3-97ba-8da64cb1e344"
-	if got2 != want2 {
-		t.Errorf("ExtractSessionID() = %q, want %q (Claude Code should take priority over Amp thread ID)", got2, want2)
 	}
 }
 
@@ -1532,43 +1649,6 @@ func TestSessionAffinitySelector_CrossProviderIsolation(t *testing.T) {
 	}
 }
 
-func TestSessionCache_GetAndRefresh(t *testing.T) {
-	t.Parallel()
-
-	cache := NewSessionCache(100 * time.Millisecond)
-	defer cache.Stop()
-
-	cache.Set("session1", "auth1")
-
-	// Verify initial value
-	got, ok := cache.GetAndRefresh("session1")
-	if !ok || got != "auth1" {
-		t.Fatalf("GetAndRefresh() = %q, %v, want auth1, true", got, ok)
-	}
-
-	// Wait half TTL and access again (should refresh)
-	time.Sleep(60 * time.Millisecond)
-	got, ok = cache.GetAndRefresh("session1")
-	if !ok || got != "auth1" {
-		t.Fatalf("GetAndRefresh() after 60ms = %q, %v, want auth1, true", got, ok)
-	}
-
-	// Wait another 60ms (total 120ms from original, but TTL refreshed at 60ms)
-	// Entry should still be valid because TTL was refreshed
-	time.Sleep(60 * time.Millisecond)
-	got, ok = cache.GetAndRefresh("session1")
-	if !ok || got != "auth1" {
-		t.Fatalf("GetAndRefresh() after refresh = %q, %v, want auth1, true (TTL should have been refreshed)", got, ok)
-	}
-
-	// Now wait full TTL without access
-	time.Sleep(110 * time.Millisecond)
-	got, ok = cache.GetAndRefresh("session1")
-	if ok {
-		t.Fatalf("GetAndRefresh() after expiry = %q, %v, want '', false", got, ok)
-	}
-}
-
 func TestSessionAffinitySelector_ExpiresWithoutRefresh(t *testing.T) {
 	t.Parallel()
 
@@ -1611,6 +1691,149 @@ func TestSessionAffinitySelector_ExpiresWithoutRefresh(t *testing.T) {
 	}
 	if third.ID != "auth-b" {
 		t.Fatalf("Pick() after expiry auth.ID = %q, want auth-b", third.ID)
+	}
+}
+
+func TestSessionAffinitySelector_RebindsWhenCachedCodexWeeklyExhausted(t *testing.T) {
+	t.Parallel()
+
+	fallback := &RoundRobinSelector{}
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: fallback,
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+
+	now := time.Now().UTC()
+	cached := &Auth{
+		ID:       "codex-a-cached",
+		Provider: "codex",
+	}
+	available := &Auth{
+		ID:       "codex-b-available",
+		Provider: "codex",
+	}
+	auths := []*Auth{cached, available}
+	opts := cliproxyexecutor.Options{
+		OriginalRequest: []byte(`{"metadata":{"user_id":"user_xxx_account__session_ac980658-63bd-4fb3-97ba-8da64cb1e344"}}`),
+	}
+
+	first, err := selector.Pick(context.Background(), "codex", "gpt-5.4", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() initial error = %v", err)
+	}
+	if first.ID != cached.ID {
+		t.Fatalf("Pick() initial auth.ID = %q, want %q", first.ID, cached.ID)
+	}
+
+	StoreCodexQuotaSmartState(cached, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0),
+				ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+			},
+		},
+	})
+
+	second, err := selector.Pick(context.Background(), "codex", "gpt-5.4", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() after weekly exhaustion error = %v", err)
+	}
+	if second.ID != available.ID {
+		t.Fatalf("Pick() after weekly exhaustion auth.ID = %q, want %q", second.ID, available.ID)
+	}
+}
+
+func TestSessionAffinitySelector_RebindsWhenCachedCodexFiveHourExhausted(t *testing.T) {
+	t.Parallel()
+
+	fallback := &RoundRobinSelector{}
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: fallback,
+		TTL:      time.Minute,
+	})
+	defer selector.Stop()
+
+	now := time.Now().UTC()
+	cached := &Auth{
+		ID:       "codex-a-cached",
+		Provider: "codex",
+	}
+	available := &Auth{
+		ID:       "codex-b-available",
+		Provider: "codex",
+	}
+	auths := []*Auth{cached, available}
+	opts := cliproxyexecutor.Options{
+		OriginalRequest: []byte(`{"metadata":{"user_id":"user_xxx_account__session_b520c78d-942d-4245-a13f-c9137f30b845"}}`),
+	}
+
+	first, err := selector.Pick(context.Background(), "codex", "gpt-5.4", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() initial error = %v", err)
+	}
+	if first.ID != cached.ID {
+		t.Fatalf("Pick() initial auth.ID = %q, want %q", first.ID, cached.ID)
+	}
+
+	StoreCodexQuotaSmartState(cached, codexQuotaSmartState{
+		Weekly: codexQuotaSmartWeeklyWindow{
+			Started: true,
+			codexQuotaSmartWindow: codexQuotaSmartWindow{
+				RemainingFraction: floatPtr(0.5),
+				ResetAt:           now.Add(24 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0),
+			ResetAt:           now.Add(time.Hour).Format(time.RFC3339),
+		},
+	})
+
+	second, err := selector.Pick(context.Background(), "codex", "gpt-5.4", opts, auths)
+	if err != nil {
+		t.Fatalf("Pick() after five-hour exhaustion error = %v", err)
+	}
+	if second.ID != available.ID {
+		t.Fatalf("Pick() after five-hour exhaustion auth.ID = %q, want %q", second.ID, available.ID)
+	}
+}
+
+func TestSessionCache_GetAndRefresh(t *testing.T) {
+	t.Parallel()
+
+	cache := NewSessionCache(100 * time.Millisecond)
+	defer cache.Stop()
+
+	cache.Set("session1", "auth1")
+
+	// Verify initial value
+	got, ok := cache.GetAndRefresh("session1")
+	if !ok || got != "auth1" {
+		t.Fatalf("GetAndRefresh() = %q, %v, want auth1, true", got, ok)
+	}
+
+	// Wait half TTL and access again (should refresh)
+	time.Sleep(60 * time.Millisecond)
+	got, ok = cache.GetAndRefresh("session1")
+	if !ok || got != "auth1" {
+		t.Fatalf("GetAndRefresh() after 60ms = %q, %v, want auth1, true", got, ok)
+	}
+
+	// Wait another 60ms (total 120ms from original, but TTL refreshed at 60ms)
+	// Entry should still be valid because TTL was refreshed
+	time.Sleep(60 * time.Millisecond)
+	got, ok = cache.GetAndRefresh("session1")
+	if !ok || got != "auth1" {
+		t.Fatalf("GetAndRefresh() after refresh = %q, %v, want auth1, true (TTL should have been refreshed)", got, ok)
+	}
+
+	// Now wait full TTL without access
+	time.Sleep(110 * time.Millisecond)
+	got, ok = cache.GetAndRefresh("session1")
+	if ok {
+		t.Fatalf("GetAndRefresh() after expiry = %q, %v, want '', false", got, ok)
 	}
 }
 

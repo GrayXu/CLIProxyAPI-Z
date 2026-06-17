@@ -1,14 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import {
-  IconKey,
-  IconBot,
-  IconFileText,
-  IconSatellite
-} from '@/components/ui/icons';
-import { useAuthStore, useConfigStore, useModelsStore, useSessionStore } from '@/stores';
-import { apiKeysApi, providersApi, authFilesApi } from '@/services/api';
+import { IconKey, IconBot, IconFileText, IconSatellite } from '@/components/ui/icons';
+import { useAuthStore, useConfigStore, useModelsStore } from '@/stores';
+import { authFilesApi } from '@/services/api';
+import { useApiKeysForModels } from '@/hooks/useApiKeysForModels';
+import { formatDateValue } from '@/utils/format';
 import styles from './DashboardPage.module.scss';
 
 interface QuickStat {
@@ -20,21 +17,6 @@ interface QuickStat {
   sublabel?: string;
 }
 
-interface ProviderStats {
-  gemini: number | null;
-  codex: number | null;
-  claude: number | null;
-  openai: number | null;
-}
-
-const getArrayLength = (value: unknown): number | null =>
-  Array.isArray(value) ? value.length : null;
-
-const getAuthFilesLength = (value: unknown): number | null => {
-  if (!value || typeof value !== 'object') return null;
-  const files = (value as { files?: unknown }).files;
-  return Array.isArray(files) ? files.length : null;
-};
 type TimeOfDay = 'morning' | 'afternoon' | 'evening' | 'night';
 
 function getTimeOfDay(): TimeOfDay {
@@ -52,44 +34,18 @@ export function DashboardPage() {
   const serverBuildDate = useAuthStore((state) => state.serverBuildDate);
   const apiBase = useAuthStore((state) => state.apiBase);
   const config = useConfigStore((state) => state.config);
-  const canViewConfig = useSessionStore((state) => state.isRouteAllowed('/config'));
-  const canViewProviders = useSessionStore((state) => state.isRouteAllowed('/ai-providers'));
-  const canViewAuthFiles = useSessionStore((state) => state.isRouteAllowed('/auth-files'));
-  const canViewSystemModels = useSessionStore((state) => state.hasCapability('system_models'));
-  const canViewDashboardSensitive = useSessionStore((state) =>
-    state.hasCapability('dashboard_sensitive')
-  );
+  const fetchConfig = useConfigStore((state) => state.fetchConfig);
 
   const models = useModelsStore((state) => state.models);
   const modelsLoading = useModelsStore((state) => state.loading);
   const fetchModelsFromStore = useModelsStore((state) => state.fetchModels);
 
-  const [stats, setStats] = useState<{
-    apiKeys: number | null;
-    authFiles: number | null;
-  }>({
-    apiKeys: null,
-    authFiles: null
-  });
-
-  const [providerStats, setProviderStats] = useState<ProviderStats>({
-    gemini: null,
-    codex: null,
-    claude: null,
-    openai: null
-  });
-
-  const [loading, setLoading] = useState(true);
+  const [authFilesCount, setAuthFilesCount] = useState<number | null>(null);
+  const [authFilesLoading, setAuthFilesLoading] = useState(false);
 
   // Time-of-day state for dynamic greeting
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>(getTimeOfDay);
   const [currentTime, setCurrentTime] = useState(() => new Date());
-
-  const apiKeysCache = useRef<string[]>([]);
-
-  useEffect(() => {
-    apiKeysCache.current = [];
-  }, [apiBase, config?.apiKeys]);
 
   // Update time every 60 seconds
   useEffect(() => {
@@ -100,59 +56,10 @@ export function DashboardPage() {
     return () => clearInterval(id);
   }, []);
 
-  const normalizeApiKeyList = (input: unknown): string[] => {
-    if (!Array.isArray(input)) return [];
-    const seen = new Set<string>();
-    const keys: string[] = [];
-
-    input.forEach((item) => {
-      const record =
-        item !== null && typeof item === 'object' && !Array.isArray(item)
-          ? (item as Record<string, unknown>)
-          : null;
-      const value =
-        typeof item === 'string'
-          ? item
-          : record
-            ? (record['api-key'] ?? record['apiKey'] ?? record.key ?? record.Key)
-            : '';
-      const trimmed = String(value ?? '').trim();
-      if (!trimmed || seen.has(trimmed)) return;
-      seen.add(trimmed);
-      keys.push(trimmed);
-    });
-
-    return keys;
-  };
-
-  const resolveApiKeysForModels = useCallback(async () => {
-    if (!canViewSystemModels) {
-      return [];
-    }
-    if (apiKeysCache.current.length) {
-      return apiKeysCache.current;
-    }
-
-    const configKeys = normalizeApiKeyList(config?.apiKeys);
-    if (configKeys.length) {
-      apiKeysCache.current = configKeys;
-      return configKeys;
-    }
-
-    try {
-      const list = await apiKeysApi.list();
-      const normalized = normalizeApiKeyList(list);
-      if (normalized.length) {
-        apiKeysCache.current = normalized;
-      }
-      return normalized;
-    } catch {
-      return [];
-    }
-  }, [canViewSystemModels, config?.apiKeys]);
+  const resolveApiKeysForModels = useApiKeysForModels();
 
   const fetchModels = useCallback(async () => {
-    if (!canViewSystemModels || connectionStatus !== 'connected' || !apiBase) {
+    if (connectionStatus !== 'connected' || !apiBase) {
       return;
     }
 
@@ -163,153 +70,92 @@ export function DashboardPage() {
     } catch {
       // Ignore model fetch errors on dashboard
     }
-  }, [
-    apiBase,
-    canViewSystemModels,
-    connectionStatus,
-    resolveApiKeysForModels,
-    fetchModelsFromStore
-  ]);
+  }, [connectionStatus, apiBase, resolveApiKeysForModels, fetchModelsFromStore]);
 
   useEffect(() => {
-    const fetchStats = async () => {
-      setLoading(true);
+    if (connectionStatus !== 'connected') {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadAuthFiles = async () => {
+      setAuthFilesLoading(true);
       try {
-        const [keysRes, filesRes, geminiRes, codexRes, claudeRes, openaiRes] = await Promise.allSettled([
-          canViewDashboardSensitive && canViewConfig ? apiKeysApi.list() : Promise.resolve(null),
-          canViewAuthFiles ? authFilesApi.list() : Promise.resolve(null),
-          canViewProviders ? providersApi.getGeminiKeys() : Promise.resolve(null),
-          canViewProviders ? providersApi.getCodexConfigs() : Promise.resolve(null),
-          canViewProviders ? providersApi.getClaudeConfigs() : Promise.resolve(null),
-          canViewProviders ? providersApi.getOpenAIProviders() : Promise.resolve(null)
-        ]);
-
-        setStats({
-          apiKeys:
-            canViewDashboardSensitive && canViewConfig && keysRes.status === 'fulfilled'
-              ? getArrayLength(keysRes.value)
-              : null,
-          authFiles:
-            canViewAuthFiles && filesRes.status === 'fulfilled'
-              ? getAuthFilesLength(filesRes.value)
-              : null
-        });
-
-        setProviderStats({
-          gemini:
-            canViewProviders && geminiRes.status === 'fulfilled'
-              ? getArrayLength(geminiRes.value)
-              : null,
-          codex:
-            canViewProviders && codexRes.status === 'fulfilled'
-              ? getArrayLength(codexRes.value)
-              : null,
-          claude:
-            canViewProviders && claudeRes.status === 'fulfilled'
-              ? getArrayLength(claudeRes.value)
-              : null,
-          openai:
-            canViewProviders && openaiRes.status === 'fulfilled'
-              ? getArrayLength(openaiRes.value)
-              : null
-        });
+        const res = await authFilesApi.list();
+        if (!cancelled) setAuthFilesCount(res.files.length);
+      } catch {
+        if (!cancelled) setAuthFilesCount(null);
       } finally {
-        setLoading(false);
+        setAuthFilesLoading(false);
       }
     };
 
-    if (connectionStatus === 'connected') {
-      fetchStats();
-      if (canViewSystemModels) {
-        fetchModels();
-      }
-    } else {
-      setLoading(false);
-    }
-  }, [
-    canViewAuthFiles,
-    canViewConfig,
-    canViewDashboardSensitive,
-    canViewProviders,
-    canViewSystemModels,
-    connectionStatus,
-    fetchModels
-  ]);
+    // 提供商/密钥统计直接来自 config store；这里只需保证配置已加载并取认证文件数。
+    fetchConfig().catch(() => undefined);
+    fetchModels();
+    void loadAuthFiles();
 
-  // Calculate total provider keys only when all provider stats are available.
-  const providerStatsReady =
-    providerStats.gemini !== null &&
-    providerStats.codex !== null &&
-    providerStats.claude !== null &&
-    providerStats.openai !== null;
-  const hasProviderStats =
-    providerStats.gemini !== null ||
-    providerStats.codex !== null ||
-    providerStats.claude !== null ||
-    providerStats.openai !== null;
-  const totalProviderKeys = providerStatsReady
-    ? (providerStats.gemini ?? 0) +
-      (providerStats.codex ?? 0) +
-      (providerStats.claude ?? 0) +
-      (providerStats.openai ?? 0)
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionStatus, fetchConfig, fetchModels]);
+
+  const configLoading = !config;
+  const providerStats = config
+    ? {
+        gemini: config.geminiApiKeys?.length ?? 0,
+        codex: config.codexApiKeys?.length ?? 0,
+        claude: config.claudeApiKeys?.length ?? 0,
+        vertex: config.vertexApiKeys?.length ?? 0,
+        openai: config.openaiCompatibility?.length ?? 0,
+      }
+    : null;
+  const totalProviderKeys = providerStats
+    ? Object.values(providerStats).reduce((sum, count) => sum + count, 0)
     : 0;
 
   const quickStats: QuickStat[] = [
-    ...(canViewDashboardSensitive && canViewConfig
-      ? [
-          {
-            label: t('dashboard.management_keys'),
-            value: stats.apiKeys ?? '-',
-            icon: <IconKey size={24} />,
-            path: '/config',
-            loading: loading && stats.apiKeys === null,
-            sublabel: t('nav.config_management')
-          }
-        ]
-      : []),
-    ...(canViewProviders
-      ? [
-          {
-            label: t('nav.ai_providers'),
-            value: loading ? '-' : providerStatsReady ? totalProviderKeys : '-',
-            icon: <IconBot size={24} />,
-            path: '/ai-providers',
-            loading: loading,
-            sublabel: hasProviderStats
-              ? t('dashboard.provider_keys_detail', {
-                  gemini: providerStats.gemini ?? '-',
-                  codex: providerStats.codex ?? '-',
-                  claude: providerStats.claude ?? '-',
-                  openai: providerStats.openai ?? '-'
-                })
-              : undefined
-          }
-        ]
-      : []),
-    ...(canViewAuthFiles
-      ? [
-          {
-            label: t('nav.auth_files'),
-            value: stats.authFiles ?? '-',
-            icon: <IconFileText size={24} />,
-            path: '/auth-files',
-            loading: loading && stats.authFiles === null,
-            sublabel: t('dashboard.oauth_credentials')
-          }
-        ]
-      : []),
-    ...(canViewSystemModels
-      ? [
-          {
-            label: t('dashboard.available_models'),
-            value: modelsLoading ? '-' : models.length,
-            icon: <IconSatellite size={24} />,
-            path: '/system',
-            loading: modelsLoading,
-            sublabel: t('dashboard.available_models_desc')
-          }
-        ]
-      : [])
+    {
+      label: t('dashboard.management_keys'),
+      value: config ? (config.apiKeys?.length ?? 0) : '-',
+      icon: <IconKey size={24} />,
+      path: '/config',
+      loading: configLoading,
+      sublabel: t('nav.config_management'),
+    },
+    {
+      label: t('nav.ai_providers'),
+      value: providerStats ? totalProviderKeys : '-',
+      icon: <IconBot size={24} />,
+      path: '/ai-providers',
+      loading: configLoading,
+      sublabel: providerStats
+        ? t('dashboard.provider_keys_detail', {
+            gemini: providerStats.gemini,
+            codex: providerStats.codex,
+            claude: providerStats.claude,
+            vertex: providerStats.vertex,
+            openai: providerStats.openai,
+          })
+        : undefined,
+    },
+    {
+      label: t('nav.auth_files'),
+      value: authFilesCount ?? '-',
+      icon: <IconFileText size={24} />,
+      path: '/auth-files',
+      loading: authFilesLoading && authFilesCount === null,
+      sublabel: t('dashboard.oauth_credentials'),
+    },
+    {
+      label: t('dashboard.available_models'),
+      value: modelsLoading ? '-' : models.length,
+      icon: <IconSatellite size={24} />,
+      path: '/system',
+      loading: modelsLoading,
+      sublabel: t('dashboard.available_models_desc'),
+    },
   ];
 
   const routingStrategyRaw = config?.routingStrategy?.trim() || '';
@@ -318,23 +164,19 @@ export function DashboardPage() {
     : routingStrategyRaw === 'round-robin'
       ? t('basic_settings.routing_strategy_round_robin')
       : routingStrategyRaw === 'fill-first'
-      ? t('basic_settings.routing_strategy_fill_first')
-      : routingStrategyRaw === 'quota-sticky'
-        ? t('basic_settings.routing_strategy_quota_sticky')
+        ? t('basic_settings.routing_strategy_fill_first')
         : routingStrategyRaw === 'quota-smart'
           ? t('basic_settings.routing_strategy_quota_smart')
-        : routingStrategyRaw;
+          : routingStrategyRaw;
   const routingStrategyBadgeClass = !routingStrategyRaw
     ? styles.configBadgeUnknown
     : routingStrategyRaw === 'round-robin'
       ? styles.configBadgeRoundRobin
       : routingStrategyRaw === 'fill-first'
         ? styles.configBadgeFillFirst
-        : routingStrategyRaw === 'quota-sticky'
-          ? styles.configBadgeQuotaSticky
-          : routingStrategyRaw === 'quota-smart'
-            ? styles.configBadgeQuotaSmart
-            : styles.configBadgeUnknown;
+        : routingStrategyRaw === 'quota-smart'
+          ? styles.configBadgeQuotaSmart
+          : styles.configBadgeUnknown;
 
   // Derived time-based values
   const greetingKey = `dashboard.greeting_${timeOfDay}`;
@@ -344,13 +186,14 @@ export function DashboardPage() {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
-    day: 'numeric'
+    day: 'numeric',
   });
 
   const formattedTime = currentTime.toLocaleTimeString(i18n.language, {
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
   });
+  const serverBuildDateDisplay = formatDateValue(serverBuildDate, i18n.language);
 
   return (
     <div className={styles.dashboard}>
@@ -397,40 +240,35 @@ export function DashboardPage() {
                   )}
             </span>
           </div>
-          {serverBuildDate && (
-            <span className={styles.buildDate}>
-              {new Date(serverBuildDate).toLocaleDateString(i18n.language)}
-            </span>
+          {serverBuildDateDisplay && (
+            <span className={styles.buildDate}>{serverBuildDateDisplay}</span>
           )}
         </div>
       </section>
 
-      {quickStats.length > 0 && (
-        <section className={styles.statsSection}>
-          <h2 className={styles.sectionHeading}>{t('dashboard.system_overview')}</h2>
-          <div className={styles.bentoGrid}>
-            {quickStats.map((stat, index) => (
-              <Link
-                key={stat.path}
-                to={stat.path}
-                className={`${styles.bentoCard} ${index === 0 ? styles.bentoLarge : ''}`}
-                style={{ animationDelay: `${index * 80}ms` }}
-              >
-                <div className={styles.bentoIcon}>{stat.icon}</div>
-                <div className={styles.bentoContent}>
-                  <span className={styles.bentoValue}>
-                    {stat.loading ? '...' : stat.value}
-                  </span>
-                  <span className={styles.bentoLabel}>{stat.label}</span>
-                  {stat.sublabel && !stat.loading && (
-                    <span className={styles.bentoSublabel}>{stat.sublabel}</span>
-                  )}
-                </div>
-              </Link>
-            ))}
-          </div>
-        </section>
-      )}
+      {/* Bento stats grid */}
+      <section className={styles.statsSection}>
+        <h2 className={styles.sectionHeading}>{t('dashboard.system_overview')}</h2>
+        <div className={styles.bentoGrid}>
+          {quickStats.map((stat, index) => (
+            <Link
+              key={stat.path}
+              to={stat.path}
+              className={`${styles.bentoCard} ${index === 0 ? styles.bentoLarge : ''}`}
+              style={{ animationDelay: `${index * 80}ms` }}
+            >
+              <div className={styles.bentoIcon}>{stat.icon}</div>
+              <div className={styles.bentoContent}>
+                <span className={styles.bentoValue}>{stat.loading ? '...' : stat.value}</span>
+                <span className={styles.bentoLabel}>{stat.label}</span>
+                {stat.sublabel && !stat.loading && (
+                  <span className={styles.bentoSublabel}>{stat.sublabel}</span>
+                )}
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
 
       {/* Config pills section */}
       {config && (
@@ -439,29 +277,33 @@ export function DashboardPage() {
           <div className={styles.configPillGrid}>
             <div className={styles.configPill}>
               <span className={styles.configPillLabel}>{t('basic_settings.debug_enable')}</span>
-              <span className={`${styles.configPillValue} ${config.debug ? styles.on : styles.off}`}>
+              <span
+                className={`${styles.configPillValue} ${config.debug ? styles.on : styles.off}`}
+              >
                 {config.debug ? t('common.yes') : t('common.no')}
               </span>
             </div>
             <div className={styles.configPill}>
-              <span className={styles.configPillLabel}>{t('basic_settings.usage_statistics_enable')}</span>
-              <span className={`${styles.configPillValue} ${config.usageStatisticsEnabled ? styles.on : styles.off}`}>
-                {config.usageStatisticsEnabled ? t('common.yes') : t('common.no')}
+              <span className={styles.configPillLabel}>
+                {t('basic_settings.logging_to_file_enable')}
               </span>
-            </div>
-            <div className={styles.configPill}>
-              <span className={styles.configPillLabel}>{t('basic_settings.logging_to_file_enable')}</span>
-              <span className={`${styles.configPillValue} ${config.loggingToFile ? styles.on : styles.off}`}>
+              <span
+                className={`${styles.configPillValue} ${config.loggingToFile ? styles.on : styles.off}`}
+              >
                 {config.loggingToFile ? t('common.yes') : t('common.no')}
               </span>
             </div>
             <div className={styles.configPill}>
-              <span className={styles.configPillLabel}>{t('basic_settings.retry_count_label')}</span>
+              <span className={styles.configPillLabel}>
+                {t('basic_settings.retry_count_label')}
+              </span>
               <span className={styles.configPillValue}>{config.requestRetry ?? 0}</span>
             </div>
             <div className={styles.configPill}>
               <span className={styles.configPillLabel}>{t('basic_settings.ws_auth_enable')}</span>
-              <span className={`${styles.configPillValue} ${config.wsAuth ? styles.on : styles.off}`}>
+              <span
+                className={`${styles.configPillValue} ${config.wsAuth ? styles.on : styles.off}`}
+              >
                 {config.wsAuth ? t('common.yes') : t('common.no')}
               </span>
             </div>
@@ -473,16 +315,16 @@ export function DashboardPage() {
             </div>
             {config.proxyUrl && (
               <div className={`${styles.configPill} ${styles.configPillWide}`}>
-                <span className={styles.configPillLabel}>{t('basic_settings.proxy_url_label')}</span>
+                <span className={styles.configPillLabel}>
+                  {t('basic_settings.proxy_url_label')}
+                </span>
                 <span className={styles.configPillMono}>{config.proxyUrl}</span>
               </div>
             )}
           </div>
-          {canViewConfig && (
-            <Link to="/config" className={styles.viewMoreLink}>
-              {t('dashboard.edit_settings')} →
-            </Link>
-          )}
+          <Link to="/config" className={styles.viewMoreLink}>
+            {t('dashboard.edit_settings')} →
+          </Link>
         </section>
       )}
     </div>

@@ -3,6 +3,41 @@
 Append new entries at the top. Record upstream syncs, management-center subtree
 updates, conflict decisions, validation scope, and push/deploy status.
 
+## 2026-06-15 - upstream/main + management-center/main sync
+
+- Branch: `merge/upstream-management-20260615`
+- Previous origin/main: `e4c500e6`
+- Upstream merged: `upstream/main` at `bbef8da4`
+- Management center merged: `management-center/main` at `729df08e`
+- Merge commits:
+  - `c0475d54 chore(merge): merge upstream backend updates`
+  - `6c890439 chore(webui): merge management center updates`
+- Conflict decisions:
+  - Preserved fork management route split, public issue API key flow, usage statistics routes, local management password reload behavior, and sticky/quota-smart routing strategies.
+  - Merged upstream plugin host/store APIs, safe-mode warning server, OpenAI video routes, websocket interceptors, and after-auth request interceptors.
+  - Preserved `requested_fast_mode` usage reporting while adopting upstream executor type metadata and service-tier/reasoning propagation.
+  - Adopted upstream removal of Amp management/API files rather than reintroducing stale routes.
+  - Merged Management WebUI plugin pages, plugin store, monthly quota UI, and log pagination updates while retaining fork Usage page navigation and viewer route filtering.
+- Generated assets:
+  - Ran `scripts/build-management-html.sh`.
+  - Updated `internal/managementasset/bundled/management.html`.
+- Validation:
+  - `scripts/build-management-html.sh`
+  - `go test ./internal/...`
+  - `go test ./sdk/...`
+  - `go test ./test/...`
+  - `go build -o /tmp/cliproxyapi-server-merge-verify ./cmd/server`
+- Deployment:
+  - Built release binary `/tmp/cliproxyapi-1a21101f` with version `v7.2.5-75-g1a21101f`.
+  - Backed up previous binary and runtime Management HTML to `/var/lib/cliproxyapi/backups/deploy-20260615T115645Z`.
+  - Installed `/usr/local/bin/cliproxyapi` and `/var/lib/cliproxyapi/static/management.html`, then restarted `cliproxyapi.service`.
+  - Verified `cliproxyapi.service` is `active/running` with `MainPID=166894`.
+  - Verified `GET http://127.0.0.1:8317/healthz` returned `200` and `{"status":"ok"}`.
+  - Verified `GET http://127.0.0.1:8317/management.html` returned `200` with `2465523` bytes.
+  - Verified runtime static HTML, live HTTP HTML, and bundled HTML all have sha256 `26e0d370ef0c62d42f93a9368243bc116295a1e62b51c296044073f1265c955b`.
+- Push:
+  - Pushed `merge/upstream-management-20260615` to `origin/main` as `a353f2fe`.
+
 ## 2026-06-01 - upstream/main + management-center/main sync
 
 - Branch: `merge/upstream-management-20260601`

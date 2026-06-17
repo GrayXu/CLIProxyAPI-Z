@@ -85,7 +85,7 @@ func TestManagerExecute_CodexQuotaSmartRecordsLocalUsageAndTriggersPrewarmRefres
 		},
 	}
 	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
-		SnapshotAt: time.Now().Add(-30 * time.Minute).UTC().Format(time.RFC3339),
+		SnapshotAt: time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339),
 		FiveHour: codexQuotaSmartWindow{
 			RemainingFraction: floatPtr(0.8),
 			ResetAt:           time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
@@ -167,6 +167,64 @@ func TestManagerExecute_CodexQuotaSmartTriggersRefreshForStalePositiveSnapshot(t
 	waitForRefreshCount(t, executor, 1)
 }
 
+func TestManagerExecute_CodexQuotaSmartWrappedBySessionAffinityRecordsLocalUsage(t *testing.T) {
+	t.Parallel()
+
+	selector := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{
+		Fallback: &CodexQuotaSmartSelector{},
+		TTL:      time.Minute,
+	})
+	manager := NewManager(nil, selector, nil)
+	t.Cleanup(manager.Close)
+	executor := &codexQuotaSmartTestExecutor{}
+	manager.RegisterExecutor(executor)
+
+	auth := &Auth{
+		ID:       "codex-smart-sticky-auth",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"account_id":   "acct-smart-sticky",
+			"access_token": "token-smart-sticky",
+		},
+	}
+	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
+		SnapshotAt: time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339),
+		FiveHour: codexQuotaSmartWindow{
+			RemainingFraction: floatPtr(0.8),
+			ResetAt:           time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
+		},
+	})
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() { reg.UnregisterClient(auth.ID) })
+
+	opts := cliproxyexecutor.Options{
+		OriginalRequest: []byte(`{"metadata":{"user_id":"user_xxx_account__session_03cf3439-1741-4476-a329-f04f81d8dd3a"}}`),
+	}
+	if _, err := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: "test-model"}, opts); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	updated, ok := manager.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth after execute")
+	}
+	state, ok := ReadCodexQuotaSmartState(updated, time.Now().UTC())
+	if !ok {
+		t.Fatalf("expected codex smart state")
+	}
+	if len(state.Local5HEvents) != 1 {
+		t.Fatalf("local_5h_events = %d, want 1", len(state.Local5HEvents))
+	}
+	if strings.TrimSpace(state.LastPrewarmAt) == "" {
+		t.Fatalf("expected last_prewarm_at to be set")
+	}
+}
+
 func TestManagerRecordCodexQuotaSmartSuccess_DeduplicatesPrewarmRefresh(t *testing.T) {
 	t.Parallel()
 
@@ -184,7 +242,7 @@ func TestManagerRecordCodexQuotaSmartSuccess_DeduplicatesPrewarmRefresh(t *testi
 		},
 	}
 	StoreCodexQuotaSmartState(auth, codexQuotaSmartState{
-		SnapshotAt: time.Now().Add(-30 * time.Minute).UTC().Format(time.RFC3339),
+		SnapshotAt: time.Now().Add(-20 * time.Minute).UTC().Format(time.RFC3339),
 		FiveHour: codexQuotaSmartWindow{
 			RemainingFraction: floatPtr(0.8),
 			ResetAt:           time.Now().Add(30 * time.Minute).UTC().Format(time.RFC3339),
