@@ -96,6 +96,12 @@ func (h *Handler) ListAuthFiles(c *gin.Context) {
 		h.listAuthFilesFromDisk(c)
 		return
 	}
+	// Sync from master if configured (triggered by frontend refresh).
+	if h.authManager.GetCredentialMaster() != "" && h.cfg != nil && h.cfg.AuthDir != "" {
+		if err := h.authManager.SyncAuthsFromMaster(c.Request.Context(), h.cfg.AuthDir); err != nil {
+			log.Debugf("ListAuthFiles: failed to sync from master: %v", err)
+		}
+	}
 	nameFilter := strings.TrimSpace(c.Query("name"))
 	authIndexFilter := strings.TrimSpace(c.Query("auth_index"))
 	auths := h.authManager.List()

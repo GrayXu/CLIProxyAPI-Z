@@ -283,6 +283,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	homeAuthCount := 1
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
+	fetchedFromMaster := make(map[string]struct{})
 	var lastErr error
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -333,6 +334,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		var authErr error
 		didRefreshOnUnauthorized := false
+		retryAuthFromMaster := false
 		for _, upstreamModel := range models {
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
@@ -365,6 +367,12 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 					}
 				}
 			}
+			if errExec != nil && m.tryFetchFromMasterOnUnauthorized(execCtx, statusCodeFromError(errExec), auth.ID, provider, fetchedFromMaster) {
+				delete(tried, auth.ID)
+				delete(attempted, auth.ID)
+				retryAuthFromMaster = true
+				break
+			}
 			if errCancel := claudeOAuthRequestCancellation(execCtx, auth, errExec); errCancel != nil {
 				return cliproxyexecutor.Response{}, errCancel
 			}
@@ -385,6 +393,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			attemptAliasResult := resolveAttemptAliasResult(routing, auth, routeModel, upstreamModel, aliasResult)
 			rewriteForceMappedResponse(&resp, attemptAliasResult)
 			return resp, nil
+		}
+		if retryAuthFromMaster {
+			continue
 		}
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
@@ -547,6 +558,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	unauthorizedRefreshTried := make(map[string]struct{})
+	fetchedFromMaster := make(map[string]struct{})
 	var lastErr error
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -691,6 +703,12 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			if isRequestInvalidError(errStream) {
 				return nil, errStream
+			}
+			if m.tryFetchFromMasterOnUnauthorized(execCtx, statusCodeFromError(errStream), auth.ID, provider, fetchedFromMaster) {
+				delete(tried, auth.ID)
+				delete(attempted, auth.ID)
+				lastErr = nil
+				continue
 			}
 			lastErr = errStream
 			if homeMode {

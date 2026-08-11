@@ -184,6 +184,13 @@ func (s *Server) setupRoutes() {
 		c.String(http.StatusOK, oauthCallbackSuccessHTML)
 	})
 
+	// Internal credential query endpoints for master-follower synchronization.
+	// PeerAuthMiddleware compares the shared peer secret directly, unlike the
+	// management middleware which verifies a human password with bcrypt.
+	internal := s.engine.Group("/v0/internal", s.mgmt.PeerAuthMiddleware())
+	internal.GET("/credential", s.mgmt.HandleCredentialQuery)
+	internal.GET("/auth-list", s.mgmt.HandleAuthList)
+
 	// Management routes are registered lazily by registerManagementRoutes when a secret is configured.
 }
 

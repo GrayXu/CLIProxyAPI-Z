@@ -65,6 +65,11 @@ type Config struct {
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
+	// CredentialMaster specifies the master node URL for credential synchronization.
+	// When set, this node acts as a follower and fetches access_token from master on 401 errors.
+	// Example: "http://192.168.1.100:8317"
+	CredentialMaster string `yaml:"credential-master" json:"credential-master"`
+
 	// SaveCooldownStatus persists runtime cooldown status next to auth files when true.
 	SaveCooldownStatus bool `yaml:"save-cooldown-status" json:"save-cooldown-status"`
 

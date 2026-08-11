@@ -859,7 +859,7 @@ func TestManager_MarkResult_TransientErrorCooldownDisabled(t *testing.T) {
 	}
 }
 
-func TestManager_MarkResult_TransientErrorCooldownDoesNotDisableAuthErrors(t *testing.T) {
+func TestManager_MarkResult_TransientErrorCooldownDoesNotDisablePaymentErrors(t *testing.T) {
 	prevQuota := quotaCooldownDisabled.Load()
 	quotaCooldownDisabled.Store(false)
 	prevTransient := transientErrorCooldownSeconds.Load()
@@ -885,7 +885,7 @@ func TestManager_MarkResult_TransientErrorCooldownDoesNotDisableAuthErrors(t *te
 		Provider: auth.Provider,
 		Model:    model,
 		Success:  false,
-		Error:    &Error{HTTPStatus: http.StatusForbidden, Message: "forbidden"},
+		Error:    &Error{HTTPStatus: http.StatusPaymentRequired, Message: "payment required"},
 	})
 
 	updated, ok := m.GetByID(auth.ID)

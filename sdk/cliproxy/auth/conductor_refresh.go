@@ -463,6 +463,9 @@ func (m *Manager) tryRefreshAfterUnauthorized(ctx context.Context, auth *Auth, e
 	if m == nil || auth == nil || alreadyTried || execErr == nil {
 		return auth, false
 	}
+	if m.GetCredentialMaster() != "" {
+		return auth, false
+	}
 	// Request-scoped failures describe this request, not stale credentials.
 	// Refreshing would turn a direct error response into an implicit retry.
 	if isRequestScopedError(execErr) {
@@ -481,6 +484,12 @@ func (m *Manager) tryRefreshAfterUnauthorized(ctx context.Context, auth *Auth, e
 }
 
 func (m *Manager) refreshAuth(ctx context.Context, id string) {
+	if m.GetCredentialMaster() != "" {
+		if err := m.fetchCredentialFromMaster(ctx, id, ""); err != nil {
+			log.Debugf("failed to fetch credential from master for %s: %v", id, err)
+		}
+		return
+	}
 	_, _ = m.refreshAuthForRequest(ctx, id, "")
 }
 
